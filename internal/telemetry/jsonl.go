@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // JSONLLogger appends one JSON object per line to a file. Safe for concurrent

@@ -13,8 +13,8 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
-	"github.com/skflowne/code-graph-harness/internal/tools"
+	"github.com/skflowne/portolan/internal/core"
+	"github.com/skflowne/portolan/internal/tools"
 )
 
 func testTools(t *testing.T) *tools.Tools {
@@ -140,7 +140,7 @@ func TestNewServer_FindDefinitionRoundTrip(t *testing.T) {
 
 func TestControlSocket_SyncBumpsGenerationAndReplies(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-test.sock")
+	sockPath := filepath.Join(dir, "portoland-test.sock")
 
 	gen := &core.GenerationCounter{}
 	cs := NewControlSocket(sockPath, gen)
@@ -178,7 +178,7 @@ func TestControlSocket_SyncBumpsGenerationAndReplies(t *testing.T) {
 
 func TestControlSocket_CancellationClosesIdleClientAndWaits(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-idle.sock")
+	sockPath := filepath.Join(dir, "portoland-idle.sock")
 	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := cs.Start(ctx); err != nil {
@@ -210,7 +210,7 @@ func TestControlSocket_CancellationClosesIdleClientAndWaits(t *testing.T) {
 
 func TestControlSocket_DuplicateDoesNotDisruptFirst(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-duplicate.sock")
+	sockPath := filepath.Join(dir, "portoland-duplicate.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -240,7 +240,7 @@ func TestControlSocket_DuplicateDoesNotDisruptFirst(t *testing.T) {
 
 func TestControlSocket_UnknownCommand(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-test2.sock")
+	sockPath := filepath.Join(dir, "portoland-test2.sock")
 
 	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -272,7 +272,7 @@ func TestControlSocket_UnknownCommand(t *testing.T) {
 
 func TestControlSocket_RejectsAndPreservesRegularFile(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-regular.sock")
+	sockPath := filepath.Join(dir, "portoland-regular.sock")
 	contents := []byte("not a socket")
 	if err := os.WriteFile(sockPath, contents, 0o644); err != nil {
 		t.Fatalf("seed regular file: %v", err)
@@ -295,7 +295,7 @@ func TestControlSocket_RejectsAndPreservesRegularFile(t *testing.T) {
 
 func TestControlSocket_RecoversActualStaleSocket(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-stale.sock")
+	sockPath := filepath.Join(dir, "portoland-stale.sock")
 	old, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("seed listener: %v", err)
@@ -315,7 +315,7 @@ func TestControlSocket_RecoversActualStaleSocket(t *testing.T) {
 
 func TestControlSocket_CleanupPreservesReplacementSocket(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-replacement.sock")
+	sockPath := filepath.Join(dir, "portoland-replacement.sock")
 	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := cs.Start(ctx); err != nil {

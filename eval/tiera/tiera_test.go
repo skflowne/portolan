@@ -1,5 +1,5 @@
 // Package tiera is the Phase 0 Tier A gate: a retrieval-correctness harness
-// that drives the real cgraphd daemon over MCP against a pinned TypeScript fixture.
+// that drives the real portoland daemon over MCP against a pinned TypeScript fixture.
 package tiera
 
 import (
@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/skflowne/code-graph-harness/eval/testinfra"
-	"github.com/skflowne/code-graph-harness/internal/tools"
+	"github.com/skflowne/portolan/eval/testinfra"
+	"github.com/skflowne/portolan/internal/tools"
 )
 
 var daemonBin string

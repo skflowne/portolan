@@ -11,12 +11,12 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // tracerName is the instrumentation-scope name registered with the
 // TracerProvider for every span the OTEL mirror emits.
-const tracerName = "github.com/skflowne/code-graph-harness/internal/telemetry"
+const tracerName = "github.com/skflowne/portolan/internal/telemetry"
 
 // otelLogger mirrors Events as OTEL spans: one span per Log call, named after
 // the tool, with the Event fields attached as attributes.

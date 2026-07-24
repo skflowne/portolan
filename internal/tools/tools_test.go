@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // capturingLogger records every Event logged so tests can assert on it.

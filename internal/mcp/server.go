@@ -1,4 +1,4 @@
-// Package mcp wires the code-graph-harness tools (internal/tools) onto the
+// Package mcp wires the portolan tools (internal/tools) onto the
 // Model Context Protocol SDK: it builds an *mcp.Server exposing the three
 // tools over stdio, and runs a project-keyed control socket used by the
 // Phase 1 staleness barrier (see control.go).
@@ -9,12 +9,12 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/skflowne/code-graph-harness/internal/tools"
+	"github.com/skflowne/portolan/internal/tools"
 )
 
 // serverName/serverVersion identify this daemon to MCP clients.
 const (
-	serverName    = "code-graph-harness"
+	serverName    = "portolan"
 	serverVersion = "0.0.1"
 )
 

@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // SocketPath derives the project-keyed control-socket path for cfg. Explicit
@@ -31,7 +31,7 @@ func SocketPath(cfg core.Config) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(cfg.ProjectRoot))
-	return filepath.Join(runtimeDir, fmt.Sprintf("cgraphd-%s.sock", hex.EncodeToString(sum[:])[:12]))
+	return filepath.Join(runtimeDir, fmt.Sprintf("portoland-%s.sock", hex.EncodeToString(sum[:])[:12]))
 }
 
 // ControlSocket is the Phase 0 scaffold for the Phase 1 staleness barrier: a
@@ -148,12 +148,12 @@ func (c *ControlSocket) Start(ctx context.Context) error {
 
 func controlRuntimeDir() string {
 	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" && filepath.IsAbs(base) {
-		return filepath.Join(base, "cgraphd")
+		return filepath.Join(base, "portoland")
 	}
 	if cache, err := os.UserCacheDir(); err == nil && filepath.IsAbs(cache) {
 		// A user-owned cache parent is a safer fallback than a predictable name
 		// directly beneath the shared temporary directory.
-		return filepath.Join(cache, "cgraphd-runtime")
+		return filepath.Join(cache, "portoland-runtime")
 	}
 	return ""
 }

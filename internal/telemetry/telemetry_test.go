@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // fakeLogger is an in-memory core.Logger for testing Tee fan-out.
