@@ -21,11 +21,16 @@ func newUnitProvider(stdin io.WriteCloser, stdout io.Reader) *Provider {
 		stdout = strings.NewReader("")
 	}
 	return &Provider{
-		stdin:     stdin,
-		stdoutR:   bufio.NewReader(stdout),
-		lifecycle: newTransportLifecycle(),
-		stderrBuf: newStderrBuffer(),
-		writeGate: newWriteGate(),
+		stdin:                    stdin,
+		stdoutR:                  bufio.NewReader(stdout),
+		lifecycle:                newTransportLifecycle(),
+		stderrBuf:                newStderrBuffer(),
+		writeGate:                newWriteGate(),
+		internalWriteTimeout:     defaultInternalWriteTimeout,
+		cancellationWriteTimeout: defaultCancellationWriteTimeout,
+		shutdownTimeout:          defaultShutdownTimeout,
+		exitWait:                 defaultExitWait,
+		killWait:                 defaultKillWait,
 	}
 }
 
@@ -219,10 +224,44 @@ func TestReadLoopFailureReleasesPendingWithCause(t *testing.T) {
 	}
 }
 
+func TestCallWaitUsesCallerContextWithoutNestedDeadline(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	observed := make(chan context.Context, 1)
+	p.observeRequestContext = func(ctx context.Context) { observed <- ctx }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := p.call(ctx, "caller-budget", nil)
+		result <- err
+	}()
+	writer.waitForMethod(t, "caller-budget")
+	select {
+	case got := <-observed:
+		if got != ctx {
+			t.Fatal("call replaced the caller context")
+		}
+		gotDeadline, _ := got.Deadline()
+		wantDeadline, _ := ctx.Deadline()
+		if !gotDeadline.Equal(wantDeadline) {
+			t.Fatalf("wait deadline = %v, want %v", gotDeadline, wantDeadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("call did not reach response wait")
+	}
+	if !p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+		t.Fatal("response was not delivered")
+	}
+	if err := waitError(t, result, "caller-budget call"); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+}
+
 func TestCallTimeoutRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	firstCtx, firstCancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	firstCtx, firstCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer firstCancel()
 
 	if _, err := p.call(firstCtx, "first", nil); !errors.Is(err, context.DeadlineExceeded) {
@@ -289,6 +328,7 @@ func TestCallBlockedWriteHonorsContext(t *testing.T) {
 	if kills.Load() != 1 {
 		t.Fatalf("process kill calls = %d, want 1", kills.Load())
 	}
+	waitSignal(t, writer.returned, "blocked writer exit")
 	p.lifecycle.mu.Lock()
 	pending := len(p.lifecycle.pending)
 	p.lifecycle.mu.Unlock()
@@ -359,7 +399,15 @@ func TestResponseWinningCancellationRaceDoesNotSendCancel(t *testing.T) {
 	if err := waitError(t, result, "response-winning call"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
+	cancellation := make(chan error, 1)
+	p.observeCancellation = func(err error) { cancellation <- err }
+	p.cancellationWriteTimeout = 10 * time.Millisecond
 	cancel()
+	select {
+	case err := <-cancellation:
+		t.Fatalf("unexpected cancellation notification: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	if methods := writer.methods(); len(methods) != 1 {
 		t.Fatalf("written methods = %v, want request only", methods)
 	}
@@ -425,6 +473,129 @@ func TestBlockedWriteGateAcquisitionHonorsCancellation(t *testing.T) {
 		t.Fatalf("written methods = %v, want none", methods)
 	}
 	waitForPendingCount(t, p, 0)
+}
+
+func TestCancellationNotificationGateTimeoutIsDropped(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.cancellationWriteTimeout = 10 * time.Millisecond
+	observed := make(chan error, 1)
+	p.observeCancellation = func(err error) { observed <- err }
+	if err := p.lockWrite(context.Background()); err != nil {
+		t.Fatalf("hold write gate: %v", err)
+	}
+	p.sendCancellation(7)
+	if err := waitError(t, observed, "cancellation gate timeout"); !errors.Is(err, context.DeadlineExceeded) {
+		p.unlockWrite()
+		t.Fatalf("cancellation error = %v, want deadline exceeded", err)
+	}
+	p.unlockWrite()
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("written methods = %v, want none", methods)
+	}
+	if err := p.lifecycle.admitExternalWrite(); err != nil {
+		t.Fatalf("provider became unusable after cancellation gate timeout: %v", err)
+	}
+}
+
+func TestCancellationNotificationBlockedWriteAbortsTransport(t *testing.T) {
+	writer := newCloseBlockingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.cancellationWriteTimeout = 10 * time.Millisecond
+	observed := make(chan error, 1)
+	p.observeCancellation = func(err error) { observed <- err }
+	p.sendCancellation(7)
+	waitSignal(t, writer.started, "cancellation write")
+	if err := waitError(t, observed, "blocked cancellation write"); err == nil {
+		t.Fatal("blocked cancellation write returned no error")
+	}
+	waitSignal(t, writer.returned, "cancellation writer exit")
+	if writer.closeCalls() != 1 {
+		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
+	}
+	if err := p.lifecycle.admitExternalWrite(); err == nil {
+		t.Fatal("provider remained open after partial cancellation frame")
+	}
+}
+
+func TestMethodNotFoundWriteIsAsynchronousAndBounded(t *testing.T) {
+	writer := newCloseBlockingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.internalWriteTimeout = 10 * time.Millisecond
+	returned := make(chan struct{})
+	go func() {
+		p.respondMethodNotFound(json.RawMessage(`"server-1"`), "unsupported")
+		close(returned)
+	}()
+	waitSignal(t, returned, "respondMethodNotFound return")
+	waitSignal(t, writer.started, "MethodNotFound write")
+	waitSignal(t, writer.returned, "MethodNotFound writer exit")
+	if err := p.lifecycle.admitExternalWrite(); err == nil {
+		t.Fatal("provider remained open after blocked MethodNotFound frame")
+	}
+}
+
+func TestCloseTimesOutWaitingForWriteGate(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.shutdownTimeout = 10 * time.Millisecond
+	var kills atomic.Int32
+	p.killProcess = func() error {
+		kills.Add(1)
+		return nil
+	}
+	if err := p.lockWrite(context.Background()); err != nil {
+		t.Fatalf("hold write gate: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- p.Close() }()
+	if err := waitError(t, result, "Close waiting for gate"); err != nil {
+		p.unlockWrite()
+		t.Fatalf("Close: %v", err)
+	}
+	p.unlockWrite()
+	if kills.Load() != 1 || writer.closeCalls() != 1 {
+		t.Fatalf("kill calls = %d stdin close calls = %d, want 1 each", kills.Load(), writer.closeCalls())
+	}
+}
+
+func TestCloseTimesOutDuringShutdownWrite(t *testing.T) {
+	writer := newCloseBlockingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.shutdownTimeout = 10 * time.Millisecond
+	result := make(chan error, 1)
+	go func() { result <- p.Close() }()
+	waitSignal(t, writer.started, "shutdown write")
+	if err := waitError(t, result, "Close during shutdown write"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	waitSignal(t, writer.returned, "shutdown writer exit")
+	if writer.closeCalls() != 1 {
+		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
+	}
+}
+
+func TestWaitForProcessKillsAndReapsWithinBounds(t *testing.T) {
+	p := newUnitProvider(&recordingWriteCloser{}, nil)
+	releaseWait := make(chan struct{})
+	waitReturned := make(chan struct{})
+	p.waitProcess = func() error {
+		<-releaseWait
+		close(waitReturned)
+		return nil
+	}
+	p.killProcess = func() error {
+		close(releaseWait)
+		return nil
+	}
+	p.killWait = time.Second
+	finished := make(chan struct{})
+	go func() {
+		p.waitForProcess(10 * time.Millisecond)
+		close(finished)
+	}()
+	waitSignal(t, finished, "bounded process wait")
+	waitSignal(t, waitReturned, "process reap")
 }
 
 func TestPartialFrameErrorTerminatesTransport(t *testing.T) {
@@ -701,6 +872,7 @@ func (w *recordingWriteCloser) closeCalls() int {
 type closeBlockingWriteCloser struct {
 	started   chan struct{}
 	release   chan struct{}
+	returned  chan struct{}
 	startOnce sync.Once
 	closeOnce sync.Once
 	mu        sync.Mutex
@@ -708,12 +880,17 @@ type closeBlockingWriteCloser struct {
 }
 
 func newCloseBlockingWriteCloser() *closeBlockingWriteCloser {
-	return &closeBlockingWriteCloser{started: make(chan struct{}), release: make(chan struct{})}
+	return &closeBlockingWriteCloser{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		returned: make(chan struct{}),
+	}
 }
 
 func (w *closeBlockingWriteCloser) Write(data []byte) (int, error) {
 	w.startOnce.Do(func() { close(w.started) })
 	<-w.release
+	close(w.returned)
 	return 0, io.ErrClosedPipe
 }
 

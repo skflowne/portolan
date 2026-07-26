@@ -171,7 +171,21 @@ func (p *Provider) Close() error {
 }
 
 func (p *Provider) close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownTimeout := p.shutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = defaultShutdownTimeout
+	}
+	exitWait := p.exitWait
+	if exitWait <= 0 {
+		exitWait = defaultExitWait
+	}
+	killWait := p.killWait
+	if killWait <= 0 {
+		killWait = defaultKillWait
+	}
+	totalCtx, totalCancel := context.WithTimeout(context.Background(), shutdownTimeout+exitWait+killWait)
+	defer totalCancel()
+	ctx, cancel := context.WithTimeout(totalCtx, shutdownTimeout)
 	defer cancel()
 
 	id := p.nextID.Add(1)
@@ -205,29 +219,46 @@ func (p *Provider) close() error {
 	}
 
 	_ = p.closeInput()
-	p.waitForProcess(exitWait)
+	p.waitForProcessContext(totalCtx, exitWait, killWait)
 	p.lifecycle.shutdown(errProviderClosed)
 	return nil
 }
 
 func (p *Provider) waitForProcess(timeout time.Duration) {
-	if p.cmd == nil || p.cmd.Process == nil {
+	if timeout <= 0 {
+		timeout = defaultExitWait
+	}
+	killWait := p.killWait
+	if killWait <= 0 {
+		killWait = defaultKillWait
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+killWait)
+	defer cancel()
+	p.waitForProcessContext(ctx, timeout, killWait)
+}
+
+func (p *Provider) waitForProcessContext(ctx context.Context, gracefulWait, killWait time.Duration) {
+	if p.waitProcess == nil {
 		return
 	}
 	done := make(chan error, 1)
-	go func() { done <- p.cmd.Wait() }()
-	timer := time.NewTimer(timeout)
+	go func() { done <- p.waitProcess() }()
+	timer := time.NewTimer(gracefulWait)
 	defer timer.Stop()
 	select {
 	case <-done:
 		return
 	case <-timer.C:
-		if p.killProcess != nil {
-			_ = p.killProcess()
-		}
-		select {
-		case <-done:
-		case <-time.After(killWait):
-		}
+	case <-ctx.Done():
+	}
+	if p.killProcess != nil {
+		_ = p.killProcess()
+	}
+	killTimer := time.NewTimer(killWait)
+	defer killTimer.Stop()
+	select {
+	case <-done:
+	case <-killTimer.C:
+	case <-ctx.Done():
 	}
 }

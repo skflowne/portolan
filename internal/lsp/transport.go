@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,8 +81,8 @@ func marshalMessage(v any) ([]byte, error) {
 }
 
 const (
-	internalWriteTimeout     = time.Second
-	cancellationWriteTimeout = 100 * time.Millisecond
+	defaultInternalWriteTimeout     = time.Second
+	defaultCancellationWriteTimeout = 100 * time.Millisecond
 )
 
 type frameWriteResult struct {
@@ -96,7 +97,7 @@ func frameBytes(data []byte) []byte {
 	return append(frame, data...)
 }
 
-func writeFull(w io.Writer, data []byte) (int, error) {
+func writeFull(w io.Writer, data []byte, complete func()) (int, error) {
 	written := 0
 	for written < len(data) {
 		n, err := w.Write(data[written:])
@@ -108,6 +109,7 @@ func writeFull(w io.Writer, data []byte) (int, error) {
 			return written, io.ErrShortWrite
 		}
 	}
+	complete()
 	return written, nil
 }
 
@@ -153,33 +155,48 @@ func (p *Provider) writeInternalMessage(ctx context.Context, v any) (bool, error
 	return p.writeFrameLocked(ctx, data)
 }
 
+const (
+	frameWriting uint32 = iota
+	frameDispatched
+	frameAborted
+)
+
 func (p *Provider) writeFrameLocked(ctx context.Context, data []byte) (bool, error) {
 	frame := frameBytes(data)
 	result := make(chan frameWriteResult, 1)
+	var state atomic.Uint32
 	go func() {
-		written, err := writeFull(p.stdin, frame)
+		written, err := writeFull(p.stdin, frame, func() {
+			if state.CompareAndSwap(frameWriting, frameDispatched) && p.afterFrameDispatch != nil {
+				p.afterFrameDispatch()
+			}
+		})
 		result <- frameWriteResult{written: written, err: err}
 	}()
 
 	select {
 	case got := <-result:
 		if got.err != nil {
+			state.CompareAndSwap(frameWriting, frameAborted)
 			p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
 			return false, got.err
+		}
+		if state.Load() != frameDispatched {
+			return false, ctx.Err()
 		}
 		return true, nil
 	case <-ctx.Done():
-		select {
-		case got := <-result:
-			if got.err == nil {
-				return true, nil
+		if !state.CompareAndSwap(frameWriting, frameAborted) {
+			got := <-result
+			if got.err != nil {
+				p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
+				return false, got.err
 			}
-			p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
-			return false, got.err
-		default:
-			p.abortTransport(ctx.Err())
-			return false, ctx.Err()
+			return true, nil
 		}
+		p.abortTransport(ctx.Err())
+		<-result
+		return false, ctx.Err()
 	}
 }
 
@@ -216,6 +233,9 @@ func (p *Provider) call(ctx context.Context, method string, params any) (json.Ra
 		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", writeErr)})
 	}
 
+	if p.observeRequestContext != nil {
+		p.observeRequestContext(ctx)
+	}
 	result, canceled := p.waitPending(ctx, key, request)
 	if canceled && dispatched {
 		p.sendCancellation(id)
@@ -234,13 +254,20 @@ func (p *Provider) call(ctx context.Context, method string, params any) (json.Ra
 
 func (p *Provider) sendCancellation(id int64) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), cancellationWriteTimeout)
+		timeout := p.cancellationWriteTimeout
+		if timeout <= 0 {
+			timeout = defaultCancellationWriteTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_, _ = p.writeMessage(ctx, rpcNotification{
+		_, err := p.writeMessage(ctx, rpcNotification{
 			JSONRPC: "2.0",
 			Method:  "$/cancelRequest",
 			Params:  cancelParams{ID: id},
 		})
+		if p.observeCancellation != nil {
+			p.observeCancellation(err)
+		}
 	}()
 }
 
@@ -294,7 +321,11 @@ func (p *Provider) readLoop() {
 
 func (p *Provider) respondMethodNotFound(id json.RawMessage, method string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), internalWriteTimeout)
+		timeout := p.internalWriteTimeout
+		if timeout <= 0 {
+			timeout = defaultInternalWriteTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		_, _ = p.writeMessage(ctx, rpcErrorResponse{
 			JSONRPC: "2.0",
