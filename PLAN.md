@@ -182,6 +182,6 @@ Never hang the model. Prototype on tsgo first (TS is target #1), other servers l
 ---
 
 ## Immediate next step
-Phase 0 skeleton (Go): daemon (MCP stdio + control socket) + `tsgo --lsp` provider + 3
-passthrough tools + WSL↔Windows path normalizer + JSONL/OTEL telemetry + Tier A scaffold on
-a pinned TS repo.
+
+**As of 2026-07-26:** Phase 1 — implement the blocking edit-sync barrier, freshness tracking,
+settle detection, filesystem watcher, `graph_status`, and stale-correctness regression gates.

@@ -25,7 +25,8 @@ Docs:
 - [`EVAL.md`](./EVAL.md) — how we measure whether it actually helps (from day one).
 - [`PLAN.md`](./PLAN.md) — architecture + phased build sequence.
 - [`PHASE0_PARALLEL.md`](./PHASE0_PARALLEL.md) — how Phase 0 was decomposed for a parallel build.
-- [`AGENTS.md`](./AGENTS.md) — working conventions for agents/contributors (build, verification gate, keeping docs current).
+- [`AGENTS.md`](./AGENTS.md) — always-loaded working conventions and verification gate.
+- [`ENGINEERING.md`](./ENGINEERING.md) — conditional ownership, package, tool, and state contracts.
 - [`TESTING.md`](./TESTING.md) — automated-test policy: test layers, red-green procedure, test integrity, eval gates.
 
 ## Direction (settled)
