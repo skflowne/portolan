@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -310,6 +311,49 @@ func TestJSONLOversizeRecordIsCappedAndCorrelated(t *testing.T) {
 	defer diagnosticsMu.Unlock()
 	if len(diagnostics) == 0 {
 		t.Fatal("oversize handling emitted no diagnostic")
+	}
+}
+
+func TestJSONLRecordRespectsMinimumConfiguredCap(t *testing.T) {
+	const recordCap = 512
+
+	sink := &controlledSink{}
+	logger := testJSONL(sink, func(opts *jsonlOptions) { opts.maxRecordBytes = recordCap })
+	pathological := string(bytes.Repeat([]byte("<"), 1000))
+	logger.Log(context.Background(), core.Event{
+		Timestamp:  pathological,
+		SessionID:  pathological,
+		GraphMode:  pathological,
+		Tool:       pathological,
+		DurationMs: math.MinInt64,
+		ResultSize: math.MinInt,
+		Truncated:  true,
+		Stale:      true,
+		Generation: math.MaxUint64,
+		Err:        pathological,
+		Extra:      map[string]any{"payload": pathological},
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	writes, _, _ := sink.snapshot()
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(writes))
+	}
+	line := writes[0]
+	if len(line) > recordCap {
+		t.Fatalf("record length = %d, want <= %d", len(line), recordCap)
+	}
+	if len(line) == 0 || line[len(line)-1] != '\n' || bytes.Count(line, []byte{'\n'}) != 1 {
+		t.Fatalf("record is not exactly one newline-terminated JSON object: %q", line)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(line[:len(line)-1], &got); err != nil {
+		t.Fatalf("decode record: %v", err)
+	}
+	if stats := logger.Stats(); stats.OversizeRecords != 1 {
+		t.Fatalf("OversizeRecords = %d, want 1", stats.OversizeRecords)
 	}
 }
 
