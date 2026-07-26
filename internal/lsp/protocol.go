@@ -58,6 +58,10 @@ type rpcErrorResponse struct {
 	Error   rpcError        `json:"error"`
 }
 
+type cancelParams struct {
+	ID int64 `json:"id"`
+}
+
 // --- initialize ---
 
 type initializeParams struct {

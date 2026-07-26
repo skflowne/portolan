@@ -21,10 +21,6 @@ import (
 )
 
 const (
-	// defaultRequestTimeout bounds every request/response round trip so a
-	// stuck or crashed tsgo can never hang a caller indefinitely.
-	defaultRequestTimeout = 5 * time.Second
-
 	// initializeTimeout is more generous: tsgo's first initialize can involve
 	// loading the TS program (tsconfig resolution, parsing), which is slower
 	// than a steady-state definition/references/documentSymbol call.
@@ -33,9 +29,10 @@ const (
 	// shutdownTimeout bounds the best-effort shutdown handshake in Close.
 	shutdownTimeout = 2 * time.Second
 
-	// exitWait bounds how long Close waits for the subprocess to exit on its
-	// own before it is killed.
+	// exitWait bounds graceful process exit; killWait bounds reaping after a
+	// forced kill so shutdown never performs an unconditional wait.
 	exitWait = 3 * time.Second
+	killWait = time.Second
 )
 
 // Provider is a core.LanguageProvider backed by a tsgo --lsp -stdio
@@ -49,16 +46,19 @@ type Provider struct {
 	writeGate chan struct{}
 	nextID    atomic.Int64
 
-	lifecycle transportLifecycle
-	closeOnce sync.Once
-	closeErr  error
+	lifecycle      transportLifecycle
+	closeOnce      sync.Once
+	closeErr       error
+	abortOnce      sync.Once
+	stdinCloseOnce sync.Once
+	stdinCloseErr  error
+	killProcess    func() error
 
 	openMu    sync.Mutex
-	openFiles map[string]bool
+	openFiles map[string]*openTransition
 	readFile  func(context.Context, string) ([]byte, error)
 
 	stderrBuf *stderrBuffer
-	timeout   time.Duration
 }
 
 // compile-time assertion that Provider satisfies core.LanguageProvider.
@@ -98,13 +98,13 @@ func New(cfg core.Config) (*Provider, error) {
 		stdin:     stdin,
 		stdoutR:   bufio.NewReader(stdout),
 		lifecycle: newTransportLifecycle(),
-		openFiles: make(map[string]bool),
+		openFiles: make(map[string]*openTransition),
 		stderrBuf: newStderrBuffer(),
 		writeGate: newWriteGate(),
 		readFile: func(_ context.Context, path string) ([]byte, error) {
 			return os.ReadFile(path)
 		},
-		timeout: defaultRequestTimeout,
+		killProcess: cmd.Process.Kill,
 	}
 
 	go p.stderrBuf.drain(stderr)
@@ -117,10 +117,22 @@ func New(cfg core.Config) (*Provider, error) {
 	}
 	rootURI := uriFromPath(root)
 
+	if err := initializeProvider(rootURI, filepath.Base(root), p.call, p.notify); err != nil {
+		p.killAndWait()
+		return nil, err
+	}
+
+	return p, nil
+}
+
+type requestFunc func(context.Context, string, any) (json.RawMessage, error)
+type notificationFunc func(context.Context, string, any) error
+
+func initializeProvider(rootURI, rootName string, request requestFunc, notify notificationFunc) error {
 	ctx, cancel := context.WithTimeout(context.Background(), initializeTimeout)
 	defer cancel()
 
-	initParams := initializeParams{
+	params := initializeParams{
 		ProcessID: os.Getpid(),
 		RootURI:   rootURI,
 		Capabilities: clientCapabilities{
@@ -130,78 +142,119 @@ func New(cfg core.Config) (*Provider, error) {
 				},
 			},
 		},
-		WorkspaceFolders: []workspaceFolder{{URI: rootURI, Name: filepath.Base(root)}},
+		WorkspaceFolders: []workspaceFolder{{URI: rootURI, Name: rootName}},
 	}
-
-	if _, err := p.call(ctx, "initialize", initParams); err != nil {
-		p.killAndWait()
-		return nil, fmt.Errorf("lsp: initialize handshake: %w", err)
+	if _, err := request(ctx, "initialize", params); err != nil {
+		return fmt.Errorf("lsp: initialize handshake: %w", err)
 	}
-	if err := p.notify("initialized", struct{}{}); err != nil {
-		p.killAndWait()
-		return nil, fmt.Errorf("lsp: initialized notification: %w", err)
+	if err := notify(ctx, "initialized", struct{}{}); err != nil {
+		return fmt.Errorf("lsp: initialized notification: %w", err)
 	}
-
-	return p, nil
+	return nil
 }
 
 // killAndWait force-terminates the subprocess; used on setup failure paths.
 func (p *Provider) killAndWait() {
-	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
-		_ = p.cmd.Wait()
-	}
+	p.abortTransport(errProviderClosed)
+	p.waitForProcess(exitWait)
 }
 
 // prepareOpen resolves file to an absolute path, ensures it has been sent to
 // the server via textDocument/didOpen, and returns both the absolute path and
 // its file:// URI.
-func (p *Provider) prepareOpen(file string) (absFile, uri string, err error) {
+func (p *Provider) prepareOpen(ctx context.Context, file string) (absFile, uri string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	absFile, err = filepath.Abs(file)
 	if err != nil {
 		return "", "", fmt.Errorf("lsp: resolving path %q: %w", file, err)
 	}
-	if err := p.ensureOpen(absFile); err != nil {
+	if err := p.ensureOpen(ctx, absFile); err != nil {
 		return "", "", err
 	}
 	return absFile, uriFromPath(absFile), nil
 }
 
-// ensureOpen sends textDocument/didOpen for absFile the first time it's seen,
-// caching that it's open so repeat queries are free. It holds openMu for the
-// whole check-then-open sequence so two concurrent callers for the same file
-// can't both send didOpen (which the server would reject on the second one).
-func (p *Provider) ensureOpen(absFile string) error {
+type openTransition struct {
+	done chan struct{}
+	err  error
+}
+
+type fileReadResult struct {
+	data []byte
+	err  error
+}
+
+func (p *Provider) readFileContext(ctx context.Context, path string) ([]byte, error) {
+	result := make(chan fileReadResult, 1)
+	go func() {
+		data, err := p.readFile(ctx, path)
+		result <- fileReadResult{data: data, err: err}
+	}()
+	select {
+	case got := <-result:
+		return got.data, got.err
+	case <-ctx.Done():
+		select {
+		case got := <-result:
+			return got.data, got.err
+		default:
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// ensureOpen elects one opener per file. External work happens outside
+// openMu, so first opens for unrelated files proceed independently.
+func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
 	p.openMu.Lock()
-	defer p.openMu.Unlock()
+	transition, exists := p.openFiles[absFile]
+	if !exists {
+		transition = &openTransition{done: make(chan struct{})}
+		p.openFiles[absFile] = transition
+	}
+	p.openMu.Unlock()
 
-	if p.openFiles[absFile] {
-		return nil
+	if exists {
+		select {
+		case <-transition.done:
+			return transition.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
-	data, err := p.readFile(context.Background(), absFile)
+	data, err := p.readFileContext(ctx, absFile)
+	if err == nil {
+		params := didOpenParams{
+			TextDocument: textDocumentItem{
+				URI:        uriFromPath(absFile),
+				LanguageID: languageIDForFile(absFile),
+				Version:    1,
+				Text:       string(data),
+			},
+		}
+		if notifyErr := p.notify(ctx, "textDocument/didOpen", params); notifyErr != nil {
+			err = fmt.Errorf("lsp: didOpen %s: %w", absFile, notifyErr)
+		}
+	} else {
+		err = fmt.Errorf("lsp: reading %s: %w", absFile, err)
+	}
+
+	p.openMu.Lock()
+	transition.err = err
 	if err != nil {
-		return fmt.Errorf("lsp: reading %s: %w", absFile, err)
+		delete(p.openFiles, absFile)
 	}
-
-	params := didOpenParams{
-		TextDocument: textDocumentItem{
-			URI:        uriFromPath(absFile),
-			LanguageID: languageIDForFile(absFile),
-			Version:    1,
-			Text:       string(data),
-		},
-	}
-	if err := p.notify("textDocument/didOpen", params); err != nil {
-		return fmt.Errorf("lsp: didOpen %s: %w", absFile, err)
-	}
-	p.openFiles[absFile] = true
-	return nil
+	close(transition.done)
+	p.openMu.Unlock()
+	return err
 }
 
 // Definition implements core.LanguageProvider.
 func (p *Provider) Definition(ctx context.Context, file string, pos core.Position) ([]core.Location, error) {
-	_, uri, err := p.prepareOpen(file)
+	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +271,7 @@ func (p *Provider) Definition(ctx context.Context, file string, pos core.Positio
 
 // References implements core.LanguageProvider.
 func (p *Provider) References(ctx context.Context, file string, pos core.Position, includeDeclaration bool) ([]core.Location, error) {
-	_, uri, err := p.prepareOpen(file)
+	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +291,7 @@ func (p *Provider) References(ctx context.Context, file string, pos core.Positio
 
 // DocumentSymbols implements core.LanguageProvider.
 func (p *Provider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
-	absFile, uri, err := p.prepareOpen(file)
+	absFile, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}

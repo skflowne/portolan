@@ -150,14 +150,15 @@ func (l *transportLifecycle) connectionErrorLocked() error {
 	return errProviderClosed
 }
 
-func (p *Provider) waitPending(ctx context.Context, key string, request *pendingRequest) pendingResult {
+func (p *Provider) waitPending(ctx context.Context, key string, request *pendingRequest) (pendingResult, bool) {
 	select {
 	case <-request.done:
+		return request.result, false
 	case <-ctx.Done():
-		p.lifecycle.complete(key, pendingResult{err: ctx.Err()})
+		canceled := p.lifecycle.complete(key, pendingResult{err: ctx.Err()})
 		<-request.done
+		return request.result, canceled
 	}
-	return request.result
 }
 
 // Close releases pending callers, performs the best-effort LSP shutdown
@@ -170,47 +171,63 @@ func (p *Provider) Close() error {
 }
 
 func (p *Provider) close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
 	id := p.nextID.Add(1)
 	key := strconv.FormatInt(id, 10)
 	shutdownMessage := rpcRequest{JSONRPC: "2.0", ID: id, Method: "shutdown", Params: nil}
 	data, marshalErr := marshalMessage(shutdownMessage)
 
-	// Holding the write gate across admission closure and the shutdown frame
-	// ensures every admitted external frame precedes shutdown.
-	_ = p.lockWrite(context.Background())
-	shutdown, started := p.lifecycle.beginClose(key)
+	var shutdown *pendingRequest
+	var started bool
 	var writeErr error
-	if started {
-		if marshalErr != nil {
-			writeErr = marshalErr
-		} else {
-			writeErr = p.writeFrameLocked(data)
+	if err := p.lockWrite(ctx); err != nil {
+		p.abortTransport(err)
+	} else {
+		shutdown, started = p.lifecycle.beginClose(key)
+		if started {
+			if marshalErr != nil {
+				writeErr = marshalErr
+			} else {
+				_, writeErr = p.writeFrameLocked(ctx, data)
+			}
 		}
+		p.unlockWrite()
 	}
-	p.unlockWrite()
 
 	if started {
 		if writeErr != nil {
 			p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing shutdown request: %w", writeErr)})
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		p.waitPending(ctx, key, shutdown)
-		cancel()
-		_ = p.writeInternalMessage(rpcNotification{JSONRPC: "2.0", Method: "exit", Params: nil})
+		_, _ = p.waitPending(ctx, key, shutdown)
+		_, _ = p.writeInternalMessage(ctx, rpcNotification{JSONRPC: "2.0", Method: "exit", Params: nil})
 	}
 
-	_ = p.stdin.Close()
-	if p.cmd != nil && p.cmd.Process != nil {
-		done := make(chan error, 1)
-		go func() { done <- p.cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(exitWait):
-			_ = p.cmd.Process.Kill()
-			<-done
-		}
-	}
-
+	_ = p.closeInput()
+	p.waitForProcess(exitWait)
 	p.lifecycle.shutdown(errProviderClosed)
 	return nil
+}
+
+func (p *Provider) waitForProcess(timeout time.Duration) {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+		if p.killProcess != nil {
+			_ = p.killProcess()
+		}
+		select {
+		case <-done:
+		case <-time.After(killWait):
+		}
+	}
 }

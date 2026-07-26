@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // readFrame reads one LSP message off r: a block of "Key: Value\r\n" headers
@@ -78,47 +79,130 @@ func marshalMessage(v any) ([]byte, error) {
 	return data, nil
 }
 
-// writeMessage admits and writes an external request or notification while
-// holding the write gate, so Close cannot place shutdown ahead of an admitted
-// frame.
-func (p *Provider) writeMessage(v any) error {
+const (
+	internalWriteTimeout     = time.Second
+	cancellationWriteTimeout = 100 * time.Millisecond
+)
+
+type frameWriteResult struct {
+	written int
+	err     error
+}
+
+func frameBytes(data []byte) []byte {
+	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
+	frame := make([]byte, 0, len(header)+len(data))
+	frame = append(frame, header...)
+	return append(frame, data...)
+}
+
+func writeFull(w io.Writer, data []byte) (int, error) {
+	written := 0
+	for written < len(data) {
+		n, err := w.Write(data[written:])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
+}
+
+// writeMessage admits and writes one complete external frame. Cancellation
+// while waiting for the gate leaves the transport usable; cancellation once a
+// frame write starts makes the stream unusable and aborts the provider.
+func (p *Provider) writeMessage(ctx context.Context, v any) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	data, err := marshalMessage(v)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := p.lockWrite(context.Background()); err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := p.lockWrite(ctx); err != nil {
+		return false, err
 	}
 	defer p.unlockWrite()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := p.lifecycle.admitExternalWrite(); err != nil {
-		return err
+		return false, err
 	}
-	return p.writeFrameLocked(data)
+	return p.writeFrameLocked(ctx, data)
 }
 
-func (p *Provider) writeInternalMessage(v any) error {
+func (p *Provider) writeInternalMessage(ctx context.Context, v any) (bool, error) {
 	data, err := marshalMessage(v)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := p.lockWrite(context.Background()); err != nil {
-		return err
+	if err := p.lockWrite(ctx); err != nil {
+		return false, err
 	}
 	defer p.unlockWrite()
-	return p.writeFrameLocked(data)
-}
-
-func (p *Provider) writeFrameLocked(data []byte) error {
-	if _, err := fmt.Fprintf(p.stdin, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	_, err := p.stdin.Write(data)
-	return err
+	return p.writeFrameLocked(ctx, data)
 }
 
-// call sends a JSON-RPC request and blocks until a matching response arrives,
-// ctx is done, or the per-request timeout elapses. It never hangs the caller
-// past that bound.
+func (p *Provider) writeFrameLocked(ctx context.Context, data []byte) (bool, error) {
+	frame := frameBytes(data)
+	result := make(chan frameWriteResult, 1)
+	go func() {
+		written, err := writeFull(p.stdin, frame)
+		result <- frameWriteResult{written: written, err: err}
+	}()
+
+	select {
+	case got := <-result:
+		if got.err != nil {
+			p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
+			return false, got.err
+		}
+		return true, nil
+	case <-ctx.Done():
+		select {
+		case got := <-result:
+			if got.err == nil {
+				return true, nil
+			}
+			p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
+			return false, got.err
+		default:
+			p.abortTransport(ctx.Err())
+			return false, ctx.Err()
+		}
+	}
+}
+
+func (p *Provider) closeInput() error {
+	p.stdinCloseOnce.Do(func() {
+		p.stdinCloseErr = p.stdin.Close()
+	})
+	return p.stdinCloseErr
+}
+
+func (p *Provider) abortTransport(cause error) {
+	p.abortOnce.Do(func() {
+		p.lifecycle.shutdown(cause)
+		_ = p.closeInput()
+		if p.killProcess != nil {
+			_ = p.killProcess()
+		}
+	})
+}
+
+// call sends a JSON-RPC request and consumes only the caller's operation
+// context. A dispatched request canceled by that context gets a best-effort
+// JSON-RPC cancellation notification.
 func (p *Provider) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := p.nextID.Add(1)
 	key := strconv.FormatInt(id, 10)
@@ -127,13 +211,15 @@ func (p *Provider) call(ctx context.Context, method string, params any) (json.Ra
 		return nil, err
 	}
 
-	if err := p.writeMessage(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
-		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", err)})
+	dispatched, writeErr := p.writeMessage(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	if writeErr != nil {
+		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", writeErr)})
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	result := p.waitPending(reqCtx, key, request)
+	result, canceled := p.waitPending(ctx, key, request)
+	if canceled && dispatched {
+		p.sendCancellation(id)
+	}
 	if result.err != nil {
 		return nil, fmt.Errorf("lsp: %s: %w", method, result.err)
 	}
@@ -146,9 +232,21 @@ func (p *Provider) call(ctx context.Context, method string, params any) (json.Ra
 	return result.message.Result, nil
 }
 
+func (p *Provider) sendCancellation(id int64) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cancellationWriteTimeout)
+		defer cancel()
+		_, _ = p.writeMessage(ctx, rpcNotification{
+			JSONRPC: "2.0",
+			Method:  "$/cancelRequest",
+			Params:  cancelParams{ID: id},
+		})
+	}()
+}
+
 // notify sends a JSON-RPC notification (no response expected).
-func (p *Provider) notify(method string, params any) error {
-	if err := p.writeMessage(rpcNotification{JSONRPC: "2.0", Method: method, Params: params}); err != nil {
+func (p *Provider) notify(ctx context.Context, method string, params any) error {
+	if _, err := p.writeMessage(ctx, rpcNotification{JSONRPC: "2.0", Method: method, Params: params}); err != nil {
 		return fmt.Errorf("lsp: %s: %w", method, err)
 	}
 	return nil
@@ -195,11 +293,15 @@ func (p *Provider) readLoop() {
 }
 
 func (p *Provider) respondMethodNotFound(id json.RawMessage, method string) {
-	_ = p.writeMessage(rpcErrorResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   rpcError{Code: -32601, Message: fmt.Sprintf("method not found: %s", method)},
-	})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), internalWriteTimeout)
+		defer cancel()
+		_, _ = p.writeMessage(ctx, rpcErrorResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Error:   rpcError{Code: -32601, Message: fmt.Sprintf("method not found: %s", method)},
+		})
+	}()
 }
 
 // shutdownPending marks the provider closed and releases every goroutine
