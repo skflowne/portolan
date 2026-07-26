@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -569,6 +571,147 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 	}
 }
 
+func TestTreeTransformsHonorContext(t *testing.T) {
+	symbols := []core.Symbol{{
+		Name: "Container",
+		Children: []core.Symbol{
+			{Name: "First"},
+			{Name: "Target"},
+		},
+	}}
+
+	t.Run("resolve", func(t *testing.T) {
+		ctx := newCancelOnCheckContext(2)
+		if _, _, err := resolveSymbolPosition(ctx, symbols, "Target", nil); !errors.Is(err, context.Canceled) {
+			t.Fatalf("resolveSymbolPosition error = %v, want context canceled", err)
+		}
+	})
+	t.Run("flatten", func(t *testing.T) {
+		ctx := newCancelOnCheckContext(2)
+		if out, truncated, err := flattenSymbols(ctx, symbols, 10); !errors.Is(err, context.Canceled) || out != nil || truncated {
+			t.Fatalf("flattenSymbols = (%v, %v, %v), want no partial output and context canceled", out, truncated, err)
+		}
+	})
+}
+
+func TestOutlineTraversalStopsAtResultCap(t *testing.T) {
+	symbols := make([]core.Symbol, 100)
+	for i := range symbols {
+		symbols[i].Name = fmt.Sprintf("Symbol%d", i)
+	}
+	ctx := &countingContext{Context: context.Background()}
+
+	out, truncated, err := flattenSymbols(ctx, symbols, 2)
+	if err != nil {
+		t.Fatalf("flattenSymbols: %v", err)
+	}
+	if !truncated || len(out) != 2 || out[0].Name != "Symbol0" || out[1].Name != "Symbol1" {
+		t.Fatalf("flattened output = %+v truncated=%v", out, truncated)
+	}
+	if ctx.checks != 4 {
+		t.Fatalf("context checks = %d, want setup plus 3 nodes visited to prove truncation", ctx.checks)
+	}
+}
+
+func TestPostProviderCancellationRemainsSoft(t *testing.T) {
+	file := "/repo/main.go"
+	type result struct {
+		found     bool
+		truncated bool
+		resultLen int
+		errText   string
+		message   string
+		err       error
+	}
+	cases := []struct {
+		name string
+		call func(context.Context, *Tools) result
+	}{
+		{
+			name: "find_definition",
+			call: func(ctx context.Context, tl *Tools) result {
+				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
+				return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
+			},
+		},
+		{
+			name: "find_references",
+			call: func(ctx context.Context, tl *Tools) result {
+				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
+				return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
+			},
+		},
+		{
+			name: "get_outline",
+			call: func(ctx context.Context, tl *Tools) result {
+				out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
+				return result{out.Found, out.Truncated, len(out.Symbols), out.Error, out.Message, err}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			provider := &cancelingResultProvider{cancel: cancel, file: file}
+			logger := &capturingLogger{}
+			tl := newTestTools(provider, logger, core.Config{})
+
+			got := tc.call(ctx, tl)
+			if got.err != nil {
+				t.Fatalf("tool returned Go error: %v", got.err)
+			}
+			if got.found || got.truncated || got.resultLen != 0 {
+				t.Fatalf("partial output: found=%v truncated=%v resultLen=%d", got.found, got.truncated, got.resultLen)
+			}
+			if got.errText != context.Canceled.Error() || got.message == "" {
+				t.Fatalf("soft result error=%q message=%q, want context canceled with message", got.errText, got.message)
+			}
+			if provider.secondStageCalls() != 0 {
+				t.Fatalf("second-stage calls = %d, want 0", provider.secondStageCalls())
+			}
+			if logger.count() != 1 {
+				t.Fatalf("telemetry events = %d, want 1", logger.count())
+			}
+			ev, _ := logger.last()
+			if ev.Err != context.Canceled.Error() || ev.ResultSize != 0 || ev.Truncated {
+				t.Fatalf("telemetry event = %+v", ev)
+			}
+		})
+	}
+}
+
+type countingContext struct {
+	context.Context
+	checks int
+}
+
+func (c *countingContext) Err() error {
+	c.checks++
+	return c.Context.Err()
+}
+
+type cancelOnCheckContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	checks   int
+	cancelAt int
+}
+
+func newCancelOnCheckContext(cancelAt int) *cancelOnCheckContext {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &cancelOnCheckContext{Context: ctx, cancel: cancel, cancelAt: cancelAt}
+}
+
+func (c *cancelOnCheckContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
 type toolCallResult struct {
 	errText string
 	err     error
@@ -608,6 +751,48 @@ func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file str
 }
 
 func (p *contextRecordingProvider) Close() error { return nil }
+
+type cancelingResultProvider struct {
+	cancel context.CancelFunc
+	file   string
+
+	mu          sync.Mutex
+	secondCalls int
+}
+
+func (p *cancelingResultProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
+	p.mu.Lock()
+	p.secondCalls++
+	p.mu.Unlock()
+	return []core.Location{{File: file}}, nil
+}
+
+func (p *cancelingResultProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
+	p.mu.Lock()
+	p.secondCalls++
+	p.mu.Unlock()
+	return []core.Location{{File: file}}, nil
+}
+
+func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) ([]core.Symbol, error) {
+	p.cancel()
+	return []core.Symbol{{
+		Name: "Container",
+		File: p.file,
+		Children: []core.Symbol{{
+			Name: "Target",
+			File: p.file,
+		}},
+	}}, nil
+}
+
+func (p *cancelingResultProvider) secondStageCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.secondCalls
+}
+
+func (p *cancelingResultProvider) Close() error { return nil }
 
 type blockingProvider struct {
 	stage       string
@@ -666,4 +851,5 @@ func (p *blockingProvider) secondStageCalls() int {
 func (p *blockingProvider) Close() error { return nil }
 
 var _ core.LanguageProvider = (*contextRecordingProvider)(nil)
+var _ core.LanguageProvider = (*cancelingResultProvider)(nil)
 var _ core.LanguageProvider = (*blockingProvider)(nil)

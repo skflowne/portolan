@@ -271,6 +271,57 @@ func TestCallTimeoutRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	}
 }
 
+func TestCanceledResponseTransformsReturnContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := decodeLocations(ctx, json.RawMessage(`[{"uri":"file:///repo/a.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]`)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("decodeLocations error = %v, want context canceled", err)
+	}
+	if _, err := decodeDocumentSymbols(ctx, json.RawMessage(`[{"name":"A","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]`), "/repo/a.ts"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("decodeDocumentSymbols error = %v, want context canceled", err)
+	}
+}
+
+func TestCanceledSerializationDoesNotReachTransport(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	marshaler := &blockingJSONMarshaler{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		exited:  make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := p.writeMessage(ctx, marshaler)
+		result <- err
+	}()
+
+	waitSignal(t, marshaler.entered, "JSON serialization")
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("writeMessage error = %v, want context canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(marshaler.release)
+		waitSignal(t, marshaler.exited, "JSON serialization cleanup")
+		<-result
+		t.Fatal("serialization held caller past cancellation")
+	}
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("written methods = %v, want none", methods)
+	}
+
+	close(marshaler.release)
+	waitSignal(t, marshaler.exited, "JSON serialization cleanup")
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("late serialization wrote methods %v", methods)
+	}
+}
+
 func TestCallBlockedWriteHonorsContext(t *testing.T) {
 	writer := newCloseBlockingWriteCloser()
 	p := newUnitProvider(writer, nil)
@@ -772,6 +823,19 @@ func writeTestFrame(t *testing.T, writer io.Writer, body string) {
 	if _, err := fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n%s", len(body), body); err != nil {
 		t.Fatalf("write frame: %v", err)
 	}
+}
+
+type blockingJSONMarshaler struct {
+	entered chan struct{}
+	release chan struct{}
+	exited  chan struct{}
+}
+
+func (m *blockingJSONMarshaler) MarshalJSON() ([]byte, error) {
+	close(m.entered)
+	<-m.release
+	close(m.exited)
+	return []byte(`{"jsonrpc":"2.0","method":"blocked"}`), nil
 }
 
 type recordingWriteCloser struct {

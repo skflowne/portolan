@@ -72,12 +72,42 @@ func (p *Provider) unlockWrite() {
 	<-p.writeGate
 }
 
-func marshalMessage(v any) ([]byte, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("lsp: marshaling message: %w", err)
+type contextWorkResult[T any] struct {
+	value T
+	err   error
+}
+
+// runContextWork bounds pure in-memory work that has no context-aware API.
+// The buffered result lets canceled callers return while finite work exits.
+func runContextWork[T any](ctx context.Context, work func() (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
 	}
-	return data, nil
+	result := make(chan contextWorkResult[T], 1)
+	go func() {
+		value, err := work()
+		result <- contextWorkResult[T]{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case got := <-result:
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		return got.value, got.err
+	}
+}
+
+func marshalMessage(ctx context.Context, v any) ([]byte, error) {
+	return runContextWork(ctx, func() ([]byte, error) {
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("lsp: marshaling message: %w", err)
+		}
+		return data, nil
+	})
 }
 
 const (
@@ -120,7 +150,7 @@ func (p *Provider) writeMessage(ctx context.Context, v any) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	data, err := marshalMessage(v)
+	data, err := marshalMessage(ctx, v)
 	if err != nil {
 		return false, err
 	}
@@ -141,7 +171,7 @@ func (p *Provider) writeMessage(ctx context.Context, v any) (bool, error) {
 }
 
 func (p *Provider) writeInternalMessage(ctx context.Context, v any) (bool, error) {
-	data, err := marshalMessage(v)
+	data, err := marshalMessage(ctx, v)
 	if err != nil {
 		return false, err
 	}

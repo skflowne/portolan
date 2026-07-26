@@ -51,6 +51,9 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 
 	file := t.normFile(in.File)
 	symbols, err := t.Provider.DocumentSymbols(ctx, file)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		out.Error = err.Error()
 		out.Message = fmt.Sprintf("failed to load symbols for %s", file)
@@ -58,7 +61,13 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 		return out, nil
 	}
 
-	pos, ok := resolveSymbolPosition(symbols, in.Symbol, in.Line)
+	pos, ok, err := resolveSymbolPosition(ctx, symbols, in.Symbol, in.Line)
+	if err != nil {
+		out.Error = err.Error()
+		out.Message = fmt.Sprintf("operation canceled while resolving symbol %q", in.Symbol)
+		t.emit(ctx, &ev, start, 0, false, err.Error())
+		return out, nil
+	}
 	if !ok {
 		out.Message = fmt.Sprintf("symbol %q not found in %s", in.Symbol, file)
 		t.emit(ctx, &ev, start, 0, false, "")
@@ -66,6 +75,9 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 	}
 
 	locs, err := t.Provider.Definition(ctx, file, pos)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		out.Error = err.Error()
 		out.Message = fmt.Sprintf("provider error resolving definition of %q", in.Symbol)
