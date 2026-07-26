@@ -90,6 +90,22 @@ func testJSONL(sink jsonlSink, mutate func(*jsonlOptions)) *JSONLLogger {
 	return newJSONLLogger(sink, opts)
 }
 
+func TestJSONLProductionDefaults(t *testing.T) {
+	opts := defaultJSONLOptions()
+	if opts.capacity != 512 {
+		t.Errorf("capacity = %d, want 512", opts.capacity)
+	}
+	if opts.admissionTimeout != 50*time.Millisecond {
+		t.Errorf("admission timeout = %s, want 50ms", opts.admissionTimeout)
+	}
+	if opts.maxRecordBytes != 16*1024 {
+		t.Errorf("record cap = %d, want 16384 bytes", opts.maxRecordBytes)
+	}
+	if opts.shutdownTimeout != 2*time.Second {
+		t.Errorf("shutdown timeout = %s, want 2s", opts.shutdownTimeout)
+	}
+}
+
 func waitFor(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
 	select {
