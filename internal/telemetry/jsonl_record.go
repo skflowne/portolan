@@ -78,14 +78,22 @@ func encodeJSONLRecord(snapshot eventSnapshot, maxBytes int) (line []byte, overs
 		return encoded, true, fallback
 	}
 
-	// minimumRecordBytes guarantees this final valid Event fits.
+	// Drop optional metadata, then size correlation fields against their encoded
+	// representation because JSON escaping can expand retained source bytes.
+	// minimumRecordBytes guarantees convergence before every field reaches one byte.
 	ev.Extra = nil
-	ev.SessionID = boundedString(originals[0], 80)
-	ev.Tool = boundedString(originals[1], 80)
-	ev.GraphMode = boundedString(originals[2], 80)
-	ev.Timestamp = boundedString(originals[3], 80)
-	ev.Err = boundedString(originals[4], 80)
-	return marshalLine(ev), true, fallback
+	for {
+		encoded = marshalLine(ev)
+		if len(encoded) <= maxBytes {
+			return encoded, true, fallback
+		}
+		for i, field := range fields {
+			if limits[i] > 1 {
+				limits[i] = max(1, limits[i]/2)
+				*field = boundedString(originals[i], limits[i])
+			}
+		}
+	}
 }
 
 func marshalLine(ev core.Event) []byte {
