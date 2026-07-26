@@ -185,12 +185,15 @@ func TestTransportProcessReapingBranches(t *testing.T) {
 	t.Run("failed kill and blocked wait stay bounded", func(t *testing.T) {
 		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
 		releaseWait := make(chan struct{})
-		defer close(releaseWait)
+		waitStarted := make(chan struct{})
+		waitReturned := make(chan struct{})
 		var waits atomic.Int32
 		var kills atomic.Int32
 		connection.waitProcess = func() error {
 			waits.Add(1)
+			close(waitStarted)
 			<-releaseWait
+			close(waitReturned)
 			return nil
 		}
 		connection.killProcess = func() error {
@@ -205,10 +208,13 @@ func TestTransportProcessReapingBranches(t *testing.T) {
 			connection.waitForProcess(time.Millisecond)
 			close(finished)
 		}()
+		waitSignal(t, waitStarted, "process wait start")
 		waitSignal(t, finished, "bounded failed-kill process waits")
 		if waits.Load() != 1 || kills.Load() != 1 {
 			t.Fatalf("process calls: wait=%d kill=%d, want 1/1", waits.Load(), kills.Load())
 		}
+		close(releaseWait)
+		waitSignal(t, waitReturned, "process wait return")
 	})
 
 	t.Run("setup abort kills and reaps", func(t *testing.T) {
