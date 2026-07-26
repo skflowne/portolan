@@ -1,89 +1,87 @@
 // Package tiera is the Phase 0 Tier A gate: a retrieval-correctness harness
-// that drives the real cgraphd daemon over MCP (stdio, via CommandTransport)
-// against a pinned TypeScript fixture and asserts the three passthrough tools
-// return the expected definitions, references, and outline.
-//
-// It doubles as the Phase 0 end-to-end check: it exercises the actual daemon
-// binary + real tsgo LSP provider + real JSONL telemetry — not stubs — and
-// verifies "every call is logged". Run it with:
-//
-//	go test ./eval/tiera/ -v
-//
-// tsgo must be on PATH (it is what the daemon spawns).
+// that drives the real cgraphd daemon over MCP against a pinned TypeScript fixture.
 package tiera
 
 import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/skflowne/code-graph-harness/eval/testinfra"
 	"github.com/skflowne/code-graph-harness/internal/tools"
 )
 
-var daemonBin string // built once in TestMain
+var daemonBin string
 
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "tiera-bin-")
+	var cleanup func()
+	var err error
+	daemonBin, cleanup, err = testinfra.BuildDaemon()
 	if err != nil {
-		panic(err)
+		panic("tiera: " + err.Error())
 	}
-	defer os.RemoveAll(tmp)
-
-	daemonBin = filepath.Join(tmp, "cgraphd")
-	// Build from the module root (two levels up from eval/tiera).
-	build := exec.Command("go", "build", "-o", daemonBin, "./cmd/cgraphd")
-	build.Dir = filepath.Join("..", "..")
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		panic("tiera: building cgraphd: " + err.Error())
-	}
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
-// fixtureRoot is the absolute path to the pinned fixture project.
-func fixtureRoot(t *testing.T) string {
+type daemonProcess struct {
+	proc   *testinfra.Daemon
+	sess   *mcp.ClientSession
+	jsonl  string
+	socket string
+	pid    int
+}
+
+func startDaemon(t *testing.T, sessionID, socket string) *daemonProcess {
 	t.Helper()
-	root, err := filepath.Abs("fixtures")
+	dir := t.TempDir()
+	jsonl := filepath.Join(dir, "telemetry.jsonl")
+	proc := testinfra.NewDaemon(t, testinfra.Config{
+		Binary:        daemonBin,
+		ProjectRoot:   testinfra.FixtureRoot(),
+		Telemetry:     jsonl,
+		SessionID:     sessionID,
+		ControlSocket: socket,
+	})
+	client := mcp.NewClient(&mcp.Implementation{Name: sessionID, Version: "0.0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.IOTransport{Reader: proc.Stdout, Writer: proc.Stdin}, nil)
 	if err != nil {
-		t.Fatalf("resolving fixture root: %v", err)
+		t.Fatalf("connecting to daemon: %v (stderr=%s)", err, proc.Stderr())
 	}
-	return root
+	d := &daemonProcess{proc: proc, sess: sess, jsonl: jsonl, socket: socket, pid: proc.WaitForPID(t)}
+	t.Cleanup(func() { _ = sess.Close() })
+	return d
 }
 
-// session spawns the real daemon over MCP and returns a connected client
-// session plus the telemetry JSONL path it writes to.
+func startLifecycleDaemon(t *testing.T) *daemonProcess {
+	t.Helper()
+	return startDaemon(t, "lifecycle", filepath.Join(t.TempDir(), "control.sock"))
+}
+
+func waitForCommand(t *testing.T, d *daemonProcess) {
+	t.Helper()
+	if _, ok := d.proc.WaitForExit(testinfra.ShortWait); !ok {
+		t.Fatal("daemon did not exit promptly")
+	}
+}
+
 func session(t *testing.T) (*mcp.ClientSession, string) {
 	t.Helper()
-	if _, err := exec.LookPath("tsgo"); err != nil {
-		t.Skip("tsgo not on PATH; skipping Tier A (the daemon spawns tsgo --lsp)")
-	}
-	root := fixtureRoot(t)
-	jsonl := filepath.Join(t.TempDir(), "telemetry.jsonl")
+	d := startDaemon(t, "tiera", filepath.Join(t.TempDir(), "control.sock"))
+	return d.sess, d.jsonl
+}
 
-	cmd := exec.Command(daemonBin,
-		"--project-root", root,
-		"--jsonl", jsonl,
-		"--graph-mode", "graph",
-		"--session-id", "tiera",
-	)
-	cmd.Stderr = os.Stderr // daemon logs go to the test log
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "tiera", Version: "0.0.1"}, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-
-	sess, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
-	if err != nil {
-		t.Fatalf("connecting to daemon: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-	return sess, jsonl
+func fixtureRoot(t *testing.T) string {
+	t.Helper()
+	return testinfra.FixtureRoot()
 }
 
 // callInto calls a tool and decodes its structured output into out.
@@ -236,6 +234,69 @@ func TestTierA(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDaemonStdinEOFStopsProvider(t *testing.T) {
+	d := startLifecycleDaemon(t)
+	started := time.Now()
+	if err := d.sess.Close(); err != nil {
+		t.Fatalf("closing MCP stdin: %v", err)
+	}
+	waitForCommand(t, d)
+	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
+		t.Fatalf("MCP disconnect took too long: %v", elapsed)
+	}
+	testinfra.AssertPIDGone(t, d.pid)
+}
+
+func TestDaemonSIGTERMStopsWithIdleControlClient(t *testing.T) {
+	d := startLifecycleDaemon(t)
+	conn := testinfra.AcceptedIdleConnection(t, d.socket)
+	defer conn.Close()
+
+	started := time.Now()
+	if err := testinfra.Terminate(d.proc.Cmd.Process); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	waitForCommand(t, d)
+	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
+		t.Fatalf("SIGTERM shutdown took too long: %v", elapsed)
+	}
+	testinfra.AssertConnectionClosed(t, conn)
+	testinfra.AssertPIDGone(t, d.pid)
+	_ = d.sess.Close()
+}
+
+func TestDuplicateDaemonLeavesOriginalFunctional(t *testing.T) {
+	first := startLifecycleDaemon(t)
+	secondProc := testinfra.NewDaemon(t, testinfra.Config{
+		Binary:        daemonBin,
+		ProjectRoot:   testinfra.FixtureRoot(),
+		SessionID:     "duplicate",
+		ControlSocket: first.socket,
+	})
+	secondPID := secondProc.WaitForPID(t)
+	secondClient := mcp.NewClient(&mcp.Implementation{Name: "duplicate", Version: "0.0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	_, err := secondClient.Connect(ctx, &mcp.IOTransport{Reader: secondProc.Stdout, Writer: secondProc.Stdin}, nil)
+	cancel()
+	if err == nil {
+		t.Fatal("duplicate daemon unexpectedly connected")
+	}
+	if waitErr, ok := secondProc.WaitForExit(testinfra.ShortWait); !ok || waitErr == nil {
+		t.Fatalf("duplicate daemon exit: err=%v exited=%v", waitErr, ok)
+	}
+	if !strings.Contains(secondProc.Stderr(), "already owned") {
+		t.Fatalf("duplicate startup error was not clear: %s", secondProc.Stderr())
+	}
+	testinfra.AssertPIDGone(t, secondPID)
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer listCancel()
+	result, err := first.sess.ListTools(listCtx, nil)
+	if err != nil || len(result.Tools) != 3 {
+		t.Fatalf("original daemon was disrupted: tools=%d err=%v", len(result.Tools), err)
+	}
 }
 
 func assertFresh(t *testing.T, stale bool) {

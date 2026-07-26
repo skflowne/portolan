@@ -63,6 +63,14 @@ flowchart TB
 the blocking barrier logic lands in Phase 1). The materialized graph index (PageRank repo-map,
 blast-radius) is deliberately **not** here yet — it enters at Phase 2.
 
+**Control-socket lifecycle:** each daemon holds an advisory lock in a private per-user runtime
+directory for the listener lifetime. Socket directories must be user-owned and non-writable by
+other users; listeners publish with mode `0600`, authorize peer credentials, and replace only the
+exact inode confirmed stale without overwriting a concurrent replacement. Shutdown closes the
+listener first, marks shutdown under the connection mutex, closes every accepted connection
+(including idle clients), and waits for handlers before removing only the socket inode this daemon
+bound. The lock file remains in place so ownership release cannot race with path cleanup.
+
 **Cross-cutting principles** (from `PLAN.md`): signatures-not-bodies · symbol-name-path addressing ·
 cap/paginate every tool · never deny grep · bounded waits everywhere · accept honest null results.
 
@@ -159,6 +167,8 @@ flowchart LR
     mcp["internal/mcp"]
     cmd["cmd/cgraphd<br/>(daemon main)"]
     eval["eval/tiera<br/>(Tier A gate)"]
+    lifecycle["eval/lifecycle<br/>(daemon lifecycle gate)"]
+    testinfra["eval/testinfra<br/>(shared real-daemon harness)"]
 
     lsp --> core
     tel --> core
@@ -172,6 +182,9 @@ flowchart LR
     cmd --> mcp
     cmd --> tools
     eval --> tools
+    eval --> testinfra
+    lifecycle --> testinfra
+    testinfra --> cmd
 
     classDef center fill:#243b53,stroke:#8bd,color:#fff;
     class core center;
@@ -200,7 +213,7 @@ flowchart LR
 
 **Phase 0 exit criteria — all green:** MCP round-trip works · every call logged (JSONL) · Tier A
 retrieval-correctness green on a pinned TS repo (`eval/tiera`, which drives the *real* daemon over
-MCP). 100 Go tests pass across 8 packages.
+MCP).
 
 ---
 

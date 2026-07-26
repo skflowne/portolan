@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,6 +176,68 @@ func TestControlSocket_SyncBumpsGenerationAndReplies(t *testing.T) {
 	}
 }
 
+func TestControlSocket_CancellationClosesIdleClientAndWaits(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "cgraphd-idle.sock")
+	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cs.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	cancel()
+	waitDone := make(chan struct{})
+	go func() {
+		cs.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return after cancellation")
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := bufio.NewReader(conn).ReadByte(); err == nil {
+		t.Fatal("expected cancellation to close idle client")
+	}
+}
+
+func TestControlSocket_DuplicateDoesNotDisruptFirst(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "cgraphd-duplicate.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	first := NewControlSocket(sockPath, &core.GenerationCounter{})
+	if err := first.Start(ctx); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	second := NewControlSocket(sockPath, &core.GenerationCounter{})
+	if err := second.Start(ctx); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("expected clear duplicate error, got %v", err)
+	}
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("first listener was disrupted: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("sync file.ts\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if reply, err := bufio.NewReader(conn).ReadString('\n'); err != nil || reply != "ok generation=1\n" {
+		t.Fatalf("unexpected reply %q (%v)", reply, err)
+	}
+	cancel()
+	first.Wait()
+}
+
 func TestControlSocket_UnknownCommand(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "cgraphd-test2.sock")
@@ -207,24 +270,81 @@ func TestControlSocket_UnknownCommand(t *testing.T) {
 	}
 }
 
-func TestControlSocket_RemovesStaleSocketFileOnStart(t *testing.T) {
+func TestControlSocket_RejectsAndPreservesRegularFile(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "cgraphd-stale.sock")
-
-	// Simulate a stale leftover socket file from a crashed previous run.
-	if err := os.WriteFile(sockPath, []byte("not a socket"), 0o644); err != nil {
-		t.Fatalf("seed stale file: %v", err)
+	sockPath := filepath.Join(dir, "cgraphd-regular.sock")
+	contents := []byte("not a socket")
+	if err := os.WriteFile(sockPath, contents, 0o644); err != nil {
+		t.Fatalf("seed regular file: %v", err)
 	}
 
 	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		cs.Wait()
-	}()
+	defer cancel()
+	if err := cs.Start(ctx); err == nil {
+		t.Fatal("expected regular file to be rejected")
+	}
+	got, err := os.ReadFile(sockPath)
+	if err != nil {
+		t.Fatalf("regular file was removed: %v", err)
+	}
+	if string(got) != string(contents) {
+		t.Fatalf("regular file changed: %q", got)
+	}
+}
 
+func TestControlSocket_RecoversActualStaleSocket(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "cgraphd-stale.sock")
+	old, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("seed listener: %v", err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatalf("close seed listener: %v", err)
+	}
+
+	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := cs.Start(ctx); err != nil {
-		t.Fatalf("Start should clean up the stale file and succeed, got: %v", err)
+		t.Fatalf("Start should recover stale socket: %v", err)
+	}
+	cancel()
+	cs.Wait()
+}
+
+func TestControlSocket_CleanupPreservesReplacementSocket(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "cgraphd-replacement.sock")
+	cs := NewControlSocket(sockPath, &core.GenerationCounter{})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cs.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	cancel()
+	// Remove the daemon's pathname while its listener remains open, then
+	// install a replacement before Wait runs ownership-aware cleanup.
+	if err := os.Remove(sockPath); err != nil {
+		t.Fatalf("unlink daemon socket: %v", err)
+	}
+	var replacement net.Listener
+	var err error
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		replacement, err = net.Listen("unix", sockPath)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if replacement == nil {
+		t.Fatalf("could not bind replacement socket: %v", err)
+	}
+	defer replacement.Close()
+	cs.Wait()
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("cleanup removed replacement socket: %v", err)
 	}
 }
 
