@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // teeLogger fans one Event out to every wrapped Logger.

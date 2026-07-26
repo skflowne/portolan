@@ -24,8 +24,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
-	"github.com/skflowne/code-graph-harness/internal/pathnorm"
+	"github.com/skflowne/portolan/internal/core"
+	"github.com/skflowne/portolan/internal/pathnorm"
 )
 
 // Tools holds everything the three tool methods need: the language provider

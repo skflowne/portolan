@@ -1,4 +1,4 @@
-module github.com/skflowne/code-graph-harness
+module github.com/skflowne/portolan
 
 go 1.26.5
 

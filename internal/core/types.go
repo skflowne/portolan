@@ -1,4 +1,4 @@
-// Package core defines the shared contracts for the code-graph-harness daemon:
+// Package core defines the shared contracts for the portolan daemon:
 // the LanguageProvider interface, the LSP-style position/location types, the
 // tool result envelopes (which always carry freshness), telemetry, and config.
 //

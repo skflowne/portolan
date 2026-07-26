@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // GetOutlineInput is the input schema for get_outline.

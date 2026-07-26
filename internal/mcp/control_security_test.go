@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 func TestControlSocket_DefaultPathUsesPrivateRuntimeDirectory(t *testing.T) {
@@ -22,7 +22,7 @@ func TestControlSocket_DefaultPathUsesPrivateRuntimeDirectory(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", runtimeBase)
 
 	path := SocketPath(core.Config{ProjectRoot: "/repo/private-runtime"})
-	wantDir := filepath.Join(runtimeBase, "cgraphd")
+	wantDir := filepath.Join(runtimeBase, "portoland")
 	if filepath.Dir(path) != wantDir {
 		t.Fatalf("default socket directory = %q, want %q", filepath.Dir(path), wantDir)
 	}
@@ -59,7 +59,7 @@ func TestControlSocket_RejectsSymlinkOwnershipLock(t *testing.T) {
 		t.Fatalf("chmod runtime base: %v", err)
 	}
 	t.Setenv("XDG_RUNTIME_DIR", runtimeBase)
-	if err := os.Mkdir(filepath.Join(runtimeBase, "cgraphd"), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(runtimeBase, "portoland"), 0o700); err != nil {
 		t.Fatalf("mkdir runtime directory: %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestControlSocket_RejectsPrecreatedRuntimeDirectorySymlink(t *testing.T) {
 	}
 	t.Setenv("XDG_RUNTIME_DIR", runtimeBase)
 	target := t.TempDir()
-	if err := os.Symlink(target, filepath.Join(runtimeBase, "cgraphd")); err != nil {
+	if err := os.Symlink(target, filepath.Join(runtimeBase, "portoland")); err != nil {
 		t.Fatalf("seed runtime symlink: %v", err)
 	}
 

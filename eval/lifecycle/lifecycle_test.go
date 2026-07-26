@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/eval/testinfra"
+	"github.com/skflowne/portolan/eval/testinfra"
 )
 
 var daemonBin string

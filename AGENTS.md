@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Working conventions for agents and contributors on `code-graph-harness`. Read this before making
+Working conventions for agents and contributors on `portolan`. Read this before making
 changes. For *what* the system is and *why*, see [`ARCHITECTURE.md`](./ARCHITECTURE.md) and
 [`PLAN.md`](./PLAN.md).
 
@@ -21,7 +21,7 @@ go test ./...         # all packages green (includes eval/tiera, which spawns th
 ```
 
 The Tier A gate (`eval/tiera`) is the retrieval-correctness regression net: it drives the actual
-`cgraphd` binary over MCP against a pinned TS fixture. Keep it green — a red Tier A means navigation
+`portoland` binary over MCP against a pinned TS fixture. Keep it green — a red Tier A means navigation
 correctness regressed.
 
 ## Code conventions
@@ -61,5 +61,5 @@ is incomplete.**
 ## Commits & branches
 
 - Default branch is `main`.
-- Small, focused commits with a clear subject line. Don't commit build artifacts (`/cgraphd` is
+- Small, focused commits with a clear subject line. Don't commit build artifacts (`/portoland` is
   gitignored) or the telemetry JSONL stream.

@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 const (

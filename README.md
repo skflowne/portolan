@@ -1,13 +1,18 @@
-# code-graph-harness
+# portolan
 
-Exploring how to introduce **code graphs** (AST + symbol/reference graph) into a coding
-agent harness to reduce token usage and improve the model's understanding and correctness
-of a codebase — letting the model answer relational questions ("where is this type, what
-are its properties, where is it used") by graph lookup instead of expensive text search.
+A **code graph** (AST + symbol/reference graph) served to coding agents over MCP, to reduce
+token usage and improve the model's understanding and correctness of a codebase — letting the
+model answer relational questions ("where is this type, what are its properties, where is it
+used") by graph lookup instead of expensive text search.
+
+portolan is **not a harness**. It is an augmentation layer for harnesses you already use:
+a portable daemon that plugs into Claude Code, Pi, or any MCP client, plus thin per-harness
+adapters. (A *portolan chart* is a navigational map drawn as lines connecting ports — a graph
+of how places reach each other, rather than a picture of the terrain.)
 
 ## Status
 
-**Phase 0 complete** — walking skeleton: a Go daemon (`cgraphd`) with an MCP stdio server, three
+**Phase 0 complete** — walking skeleton: a Go daemon (`portoland`) with an MCP stdio server, three
 passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
 provider, deterministic daemon/control-socket lifecycle, JSONL telemetry, WSL↔Windows path
 handling, and a Tier A retrieval-correctness gate that drives the real daemon over MCP. **Phase 1

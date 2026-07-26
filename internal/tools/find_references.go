@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // FindReferencesInput is the input schema for find_references.

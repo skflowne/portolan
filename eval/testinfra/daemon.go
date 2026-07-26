@@ -38,23 +38,23 @@ func FixtureRoot() string {
 	return filepath.Join(ModuleRoot(), "eval", "tiera", "fixtures")
 }
 
-// BuildDaemon builds cgraphd once for a package's TestMain.
+// BuildDaemon builds portoland once for a package's TestMain.
 func BuildDaemon() (string, func(), error) {
 	if runtime.GOOS == "windows" {
 		return "", func() {}, nil
 	}
-	tmp, err := os.MkdirTemp("", "cgraphd-eval-")
+	tmp, err := os.MkdirTemp("", "portoland-eval-")
 	if err != nil {
 		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
-	bin := filepath.Join(tmp, "cgraphd")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/cgraphd")
+	bin := filepath.Join(tmp, "portoland")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/portoland")
 	build.Dir = ModuleRoot()
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("building cgraphd: %w", err)
+		return "", nil, fmt.Errorf("building portoland: %w", err)
 	}
 	return bin, cleanup, nil
 }
@@ -85,7 +85,7 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// Daemon owns one cgraphd process and its wrapped tsgo child.
+// Daemon owns one portoland process and its wrapped tsgo child.
 type Daemon struct {
 	Cmd     *exec.Cmd
 	Stdin   io.WriteCloser
@@ -111,7 +111,7 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "tsgo.pid")
 	wrapper := filepath.Join(dir, "tsgo-wrapper.sh")
-	script := "#!/bin/sh\necho $$ > \"$CGRAPH_TSGO_PID_FILE\"\nexec \"$CGRAPH_REAL_TSGO\" \"$@\"\n"
+	script := "#!/bin/sh\necho $$ > \"$PORTOLAN_TSGO_PID_FILE\"\nexec \"$PORTOLAN_REAL_TSGO\" \"$@\"\n"
 	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing tsgo wrapper: %v", err)
 	}
@@ -137,8 +137,8 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	stderr := &lockedBuffer{}
 	cmd := exec.Command(cfg.Binary, args...)
 	cmd.Env = append(os.Environ(),
-		"CGRAPH_REAL_TSGO="+realTsgo,
-		"CGRAPH_TSGO_PID_FILE="+pidFile,
+		"PORTOLAN_REAL_TSGO="+realTsgo,
+		"PORTOLAN_TSGO_PID_FILE="+pidFile,
 	)
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()

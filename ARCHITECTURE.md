@@ -4,7 +4,7 @@ Visual companion to `PLAN.md` (the *how* and the *order*), `INTEGRATION_CONSTRAI
 (decisions), and `EVAL.md` (measurement). Diagrams are [Mermaid](https://mermaid.js.org/) and
 render natively on GitHub.
 
-**One sentence:** a long-lived **Go daemon** (`cgraphd`) exposes an always-fresh, LSP-derived
+**One sentence:** a long-lived **Go daemon** (`portoland`) exposes an always-fresh, LSP-derived
 code graph to a coding agent through **two faces on one process** — MCP tools for the model, and a
 control socket for the harness's edit-sync barrier — so the agent navigates code by typed graph
 lookup instead of grep.
@@ -24,7 +24,7 @@ flowchart TB
         Hooks["Hooks<br/>SessionStart · PostToolUse"]
     end
 
-    subgraph Daemon["cgraphd — Go daemon (portable core)"]
+    subgraph Daemon["portoland — Go daemon (portable core)"]
         direction TB
         MCP["MCP server<br/>(stdio)"]
         Ctl["Control socket<br/>(project-keyed)"]
@@ -165,7 +165,7 @@ flowchart LR
     tel["internal/telemetry"]
     tools["internal/tools"]
     mcp["internal/mcp"]
-    cmd["cmd/cgraphd<br/>(daemon main)"]
+    cmd["cmd/portoland<br/>(daemon main)"]
     eval["eval/tiera<br/>(Tier A gate)"]
     lifecycle["eval/lifecycle<br/>(daemon lifecycle gate)"]
     testinfra["eval/testinfra<br/>(shared real-daemon harness)"]
@@ -190,7 +190,7 @@ flowchart LR
     class core center;
 ```
 
-The daemon wires the seam: `cmd/cgraphd` swaps the `StubProvider` for `lsp.New(cfg)` and the
+The daemon wires the seam: `cmd/portoland` swaps the `StubProvider` for `lsp.New(cfg)` and the
 `NopLogger` for a JSONL logger — the only two lines that know the concrete implementations.
 
 ---

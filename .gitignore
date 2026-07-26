@@ -6,5 +6,5 @@ target/
 .DS_Store
 scratch/
 
-# Go daemon build artifact (built at repo root by `go build ./cmd/cgraphd`)
-/cgraphd
+# Go daemon build artifact (built at repo root by `go build ./cmd/portoland`)
+/portoland

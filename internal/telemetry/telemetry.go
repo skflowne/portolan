@@ -3,7 +3,7 @@ package telemetry
 import (
 	"context"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // FromConfig builds the daemon's default telemetry spine: a JSONLLogger

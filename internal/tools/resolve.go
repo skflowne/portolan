@@ -1,6 +1,6 @@
 package tools
 
-import "github.com/skflowne/code-graph-harness/internal/core"
+import "github.com/skflowne/portolan/internal/core"
 
 // resolveSymbolPosition walks the (possibly nested) symbol tree returned by
 // DocumentSymbols looking for a symbol named name. If line is non-nil, a

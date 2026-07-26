@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/tools"
+	"github.com/skflowne/portolan/internal/tools"
 )
 
 func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {

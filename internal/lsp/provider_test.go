@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skflowne/code-graph-harness/internal/core"
+	"github.com/skflowne/portolan/internal/core"
 )
 
 // newTestProvider spawns a real tsgo --lsp -stdio subprocess rooted at

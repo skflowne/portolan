@@ -2,7 +2,7 @@ package core
 
 import "sync/atomic"
 
-// Config is the daemon's runtime configuration, assembled in cmd/cgraphd from
+// Config is the daemon's runtime configuration, assembled in cmd/portoland from
 // flags and environment. It is passed by value to constructors.
 type Config struct {
 	// ProjectRoot is the absolute, host-normalized root of the analyzed repo.
