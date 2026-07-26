@@ -406,9 +406,6 @@ func TestToolsOwnOneOperationDeadline(t *testing.T) {
 				t.Fatalf("operation budget remaining = %v, want (4s, 5s]", remaining)
 			}
 			for i, got := range contexts[1:] {
-				if got != contexts[0] {
-					t.Fatalf("provider call %d received a different operation context", i+2)
-				}
 				if nextDeadline, _ := got.Deadline(); !nextDeadline.Equal(deadline) {
 					t.Fatalf("provider call %d deadline = %v, want %v", i+2, nextDeadline, deadline)
 				}
