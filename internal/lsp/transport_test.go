@@ -21,16 +21,7 @@ func newUnitProvider(stdin io.WriteCloser, stdout io.Reader) *Provider {
 		stdout = strings.NewReader("")
 	}
 	return &Provider{
-		stdin:                    stdin,
-		stdoutR:                  bufio.NewReader(stdout),
-		lifecycle:                newTransportLifecycle(),
-		stderrBuf:                newStderrBuffer(),
-		writeGate:                newWriteGate(),
-		internalWriteTimeout:     defaultInternalWriteTimeout,
-		cancellationWriteTimeout: defaultCancellationWriteTimeout,
-		shutdownTimeout:          defaultShutdownTimeout,
-		exitWait:                 defaultExitWait,
-		killWait:                 defaultKillWait,
+		transport: newTransport(transportConfig{input: stdin, output: stdout}),
 	}
 }
 
@@ -47,7 +38,7 @@ func waitPendingResult(t *testing.T, request *pendingRequest) pendingResult {
 
 func TestPendingResponseTargetSurvivesConcurrentShutdown(t *testing.T) {
 	p := newUnitProvider(&recordingWriteCloser{}, nil)
-	request, err := p.lifecycle.register("1")
+	request, err := p.transport.register("1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -61,12 +52,12 @@ func TestPendingResponseTargetSurvivesConcurrentShutdown(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		delivered = p.lifecycle.deliverResponse("1", response)
+		delivered = p.transport.deliverResponse("1", response)
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		p.shutdownPending(cause)
+		p.transport.readerFailed(cause)
 	}()
 	close(start)
 	finished := make(chan struct{})
@@ -92,17 +83,17 @@ func TestPendingResponseTargetSurvivesConcurrentShutdown(t *testing.T) {
 
 func TestPendingResponseDeliveredAtMostOnce(t *testing.T) {
 	p := newUnitProvider(&recordingWriteCloser{}, nil)
-	request, err := p.lifecycle.register("1")
+	request, err := p.transport.register("1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	first := &jsonrpcMessage{Result: json.RawMessage(`1`)}
 	second := &jsonrpcMessage{Result: json.RawMessage(`2`)}
 
-	if !p.lifecycle.deliverResponse("1", first) {
+	if !p.transport.deliverResponse("1", first) {
 		t.Fatal("first response did not complete request")
 	}
-	if p.lifecycle.deliverResponse("1", second) {
+	if p.transport.deliverResponse("1", second) {
 		t.Fatal("duplicate response completed request")
 	}
 	if result := waitPendingResult(t, request); result.message != first || result.err != nil {
@@ -113,7 +104,7 @@ func TestPendingResponseDeliveredAtMostOnce(t *testing.T) {
 func TestPendingResponseAndCancellationCompleteExactlyOnce(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		p := newUnitProvider(&recordingWriteCloser{}, nil)
-		request, err := p.lifecycle.register("1")
+		request, err := p.transport.register("1")
 		if err != nil {
 			t.Fatalf("register: %v", err)
 		}
@@ -123,7 +114,7 @@ func TestPendingResponseAndCancellationCompleteExactlyOnce(t *testing.T) {
 			canceled bool
 		}, 1)
 		go func() {
-			got, canceled := p.waitPending(ctx, "1", request)
+			got, canceled := p.transport.waitPending(ctx, "1", request)
 			result <- struct {
 				result   pendingResult
 				canceled bool
@@ -142,7 +133,7 @@ func TestPendingResponseAndCancellationCompleteExactlyOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			p.lifecycle.deliverResponse("1", response)
+			p.transport.deliverResponse("1", response)
 		}()
 		close(start)
 		wg.Wait()
@@ -166,13 +157,13 @@ func TestPendingResponseAndCancellationCompleteExactlyOnce(t *testing.T) {
 func TestReadLoopDeliversFramedResponse(t *testing.T) {
 	reader, writer := io.Pipe()
 	p := newUnitProvider(&recordingWriteCloser{}, reader)
-	request, err := p.lifecycle.register("1")
+	request, err := p.transport.register("1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	loopDone := make(chan struct{})
 	go func() {
-		p.readLoop()
+		p.transport.readLoop()
 		close(loopDone)
 	}()
 
@@ -194,15 +185,15 @@ func TestReadLoopDeliversFramedResponse(t *testing.T) {
 func TestReadLoopFailureReleasesPendingWithCause(t *testing.T) {
 	reader, writer := io.Pipe()
 	p := newUnitProvider(&recordingWriteCloser{}, reader)
-	p.stderrBuf.buf = []byte("server exploded")
-	request, err := p.lifecycle.register("1")
+	p.transport.stderr.buf = []byte("server exploded")
+	request, err := p.transport.register("1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
 	loopDone := make(chan struct{})
 	go func() {
-		p.readLoop()
+		p.transport.readLoop()
 		close(loopDone)
 	}()
 	cause := errors.New("process pipe failed")
@@ -231,14 +222,14 @@ func TestCallDeadlineRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "caller-budget", nil)
+		_, err := p.transport.call(ctx, "caller-budget", nil)
 		result <- err
 	}()
 	writer.waitForMethod(t, "caller-budget")
 	if err := waitError(t, result, "caller-budget call"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("call error = %v, want deadline exceeded", err)
 	}
-	if p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+	if p.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
 		t.Fatal("late response completed timed-out request")
 	}
 }
@@ -249,20 +240,20 @@ func TestCallTimeoutRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	firstCtx, firstCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer firstCancel()
 
-	if _, err := p.call(firstCtx, "first", nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := p.transport.call(firstCtx, "first", nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("first call error = %v, want deadline exceeded", err)
 	}
-	if p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`"late"`)}) {
+	if p.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`"late"`)}) {
 		t.Fatal("late response completed timed-out request")
 	}
 
 	resultCh := make(chan pendingResult, 1)
 	go func() {
-		result, err := p.call(context.Background(), "second", nil)
+		result, err := p.transport.call(context.Background(), "second", nil)
 		resultCh <- pendingResult{message: &jsonrpcMessage{Result: result}, err: err}
 	}()
 	writer.waitForMethod(t, "second")
-	if !p.lifecycle.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`"fresh"`)}) {
+	if !p.transport.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`"fresh"`)}) {
 		t.Fatal("second response did not complete request")
 	}
 	result := waitCallResult(t, resultCh)
@@ -309,7 +300,7 @@ func TestFramePreparationCancellationDoesNotWrite(t *testing.T) {
 	p := newUnitProvider(writer, nil)
 	ctx := newCancelOnErrCheckContext(2)
 
-	dispatched, err := p.writeFrameLocked(ctx, []byte(`{"jsonrpc":"2.0","method":"prepared"}`))
+	dispatched, err := p.transport.writeFrameLocked(ctx, []byte(`{"jsonrpc":"2.0","method":"prepared"}`))
 	if !errors.Is(err, context.Canceled) || dispatched {
 		t.Fatalf("writeFrameLocked = (%v, %v), want not dispatched and context canceled", dispatched, err)
 	}
@@ -329,7 +320,7 @@ func TestCanceledSerializationDoesNotReachTransport(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.writeMessage(ctx, marshaler)
+		_, err := p.transport.writeMessage(ctx, writeExternal, marshaler)
 		result <- err
 	}()
 
@@ -361,14 +352,14 @@ func TestCallBlockedWriteHonorsContext(t *testing.T) {
 	writer := newCloseBlockingWriteCloser()
 	p := newUnitProvider(writer, nil)
 	var kills atomic.Int32
-	p.killProcess = func() error {
+	p.transport.killProcess = func() error {
 		kills.Add(1)
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "blocked", nil)
+		_, err := p.transport.call(ctx, "blocked", nil)
 		result <- err
 	}()
 
@@ -400,9 +391,9 @@ func TestCallBlockedWriteHonorsContext(t *testing.T) {
 		t.Fatalf("process kill calls = %d, want 1", kills.Load())
 	}
 	waitSignal(t, writer.returned, "blocked writer exit")
-	p.lifecycle.mu.Lock()
-	pending := len(p.lifecycle.pending)
-	p.lifecycle.mu.Unlock()
+	p.transport.mu.Lock()
+	pending := len(p.transport.pending)
+	p.transport.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("pending request count = %d, want 0", pending)
 	}
@@ -415,7 +406,7 @@ func TestCallReturnsWhenWriterIgnoresTransportAbort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "uninterruptible", nil)
+		_, err := p.transport.call(ctx, "uninterruptible", nil)
 		result <- err
 	}()
 	waitSignal(t, writer.started, "uninterruptible write")
@@ -436,7 +427,7 @@ func TestCanceledDispatchedCallSendsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "work", nil)
+		_, err := p.transport.call(ctx, "work", nil)
 		result <- err
 	}()
 	writer.waitForMethod(t, "work")
@@ -471,7 +462,7 @@ func TestCanceledDispatchedCallSendsCancellation(t *testing.T) {
 	if cancellation.JSONRPC != "2.0" || cancellation.ID != nil || cancellation.Method != "$/cancelRequest" || cancellation.Params.ID != request.ID {
 		t.Fatalf("cancellation = %+v, request id = %d", cancellation, request.ID)
 	}
-	if p.lifecycle.deliverResponse(strconv.FormatInt(request.ID, 10), &jsonrpcMessage{Result: json.RawMessage(`"late"`)}) {
+	if p.transport.deliverResponse(strconv.FormatInt(request.ID, 10), &jsonrpcMessage{Result: json.RawMessage(`"late"`)}) {
 		t.Fatal("late response completed canceled request")
 	}
 }
@@ -482,19 +473,19 @@ func TestResponseWinningCancellationRaceDoesNotSendCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "response-wins", nil)
+		_, err := p.transport.call(ctx, "response-wins", nil)
 		result <- err
 	}()
 	writer.waitForMethod(t, "response-wins")
-	if !p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+	if !p.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
 		t.Fatal("response was not delivered")
 	}
 	if err := waitError(t, result, "response-winning call"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	cancellation := make(chan error, 1)
-	p.observeCancellation = func(err error) { cancellation <- err }
-	p.cancellationWriteTimeout = 10 * time.Millisecond
+	p.transport.observeCancellation = func(err error) { cancellation <- err }
+	p.transport.cancellationWriteTimeout = 10 * time.Millisecond
 	cancel()
 	select {
 	case err := <-cancellation:
@@ -509,33 +500,33 @@ func TestResponseWinningCancellationRaceDoesNotSendCancel(t *testing.T) {
 func TestCanceledWriteGateAcquisitionDoesNotDispatch(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	if err := p.lockWrite(context.Background()); err != nil {
+	if err := p.transport.lockWrite(context.Background()); err != nil {
 		t.Fatalf("hold write gate: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.call(ctx, "blocked-at-gate", nil); !errors.Is(err, context.Canceled) {
-		p.unlockWrite()
+	if _, err := p.transport.call(ctx, "blocked-at-gate", nil); !errors.Is(err, context.Canceled) {
+		p.transport.unlockWrite()
 		t.Fatalf("call error = %v, want context canceled", err)
 	}
-	p.unlockWrite()
+	p.transport.unlockWrite()
 	if methods := writer.methods(); len(methods) != 0 {
 		t.Fatalf("written methods = %v, want none", methods)
 	}
-	p.lifecycle.mu.Lock()
-	pending := len(p.lifecycle.pending)
-	p.lifecycle.mu.Unlock()
+	p.transport.mu.Lock()
+	pending := len(p.transport.pending)
+	p.transport.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("pending request count = %d, want 0", pending)
 	}
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(context.Background(), "usable", nil)
+		_, err := p.transport.call(context.Background(), "usable", nil)
 		result <- err
 	}()
 	writer.waitForMethod(t, "usable")
-	if !p.lifecycle.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+	if !p.transport.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
 		t.Fatal("usable response was not delivered")
 	}
 	if err := waitError(t, result, "usable call"); err != nil {
@@ -546,22 +537,22 @@ func TestCanceledWriteGateAcquisitionDoesNotDispatch(t *testing.T) {
 func TestBlockedWriteGateAcquisitionHonorsCancellation(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	if err := p.lockWrite(context.Background()); err != nil {
+	if err := p.transport.lockWrite(context.Background()); err != nil {
 		t.Fatalf("hold write gate: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(ctx, "waiting-at-gate", nil)
+		_, err := p.transport.call(ctx, "waiting-at-gate", nil)
 		result <- err
 	}()
 	waitForPendingCount(t, p, 1)
 	cancel()
 	if err := waitError(t, result, "gate-blocked call"); !errors.Is(err, context.Canceled) {
-		p.unlockWrite()
+		p.transport.unlockWrite()
 		t.Fatalf("call error = %v, want context canceled", err)
 	}
-	p.unlockWrite()
+	p.transport.unlockWrite()
 	if methods := writer.methods(); len(methods) != 0 {
 		t.Fatalf("written methods = %v, want none", methods)
 	}
@@ -571,22 +562,22 @@ func TestBlockedWriteGateAcquisitionHonorsCancellation(t *testing.T) {
 func TestCancellationNotificationGateTimeoutIsDropped(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	p.cancellationWriteTimeout = 10 * time.Millisecond
+	p.transport.cancellationWriteTimeout = 10 * time.Millisecond
 	observed := make(chan error, 1)
-	p.observeCancellation = func(err error) { observed <- err }
-	if err := p.lockWrite(context.Background()); err != nil {
+	p.transport.observeCancellation = func(err error) { observed <- err }
+	if err := p.transport.lockWrite(context.Background()); err != nil {
 		t.Fatalf("hold write gate: %v", err)
 	}
-	p.sendCancellation(7)
+	p.transport.sendCancellation(7)
 	if err := waitError(t, observed, "cancellation gate timeout"); !errors.Is(err, context.DeadlineExceeded) {
-		p.unlockWrite()
+		p.transport.unlockWrite()
 		t.Fatalf("cancellation error = %v, want deadline exceeded", err)
 	}
-	p.unlockWrite()
+	p.transport.unlockWrite()
 	if methods := writer.methods(); len(methods) != 0 {
 		t.Fatalf("written methods = %v, want none", methods)
 	}
-	if err := p.lifecycle.admitExternalWrite(); err != nil {
+	if err := p.transport.admitWrite(writeExternal); err != nil {
 		t.Fatalf("provider became unusable after cancellation gate timeout: %v", err)
 	}
 }
@@ -594,10 +585,10 @@ func TestCancellationNotificationGateTimeoutIsDropped(t *testing.T) {
 func TestCancellationNotificationBlockedWriteAbortsTransport(t *testing.T) {
 	writer := newCloseBlockingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	p.cancellationWriteTimeout = 10 * time.Millisecond
+	p.transport.cancellationWriteTimeout = 10 * time.Millisecond
 	observed := make(chan error, 1)
-	p.observeCancellation = func(err error) { observed <- err }
-	p.sendCancellation(7)
+	p.transport.observeCancellation = func(err error) { observed <- err }
+	p.transport.sendCancellation(7)
 	waitSignal(t, writer.started, "cancellation write")
 	if err := waitError(t, observed, "blocked cancellation write"); err == nil {
 		t.Fatal("blocked cancellation write returned no error")
@@ -606,7 +597,7 @@ func TestCancellationNotificationBlockedWriteAbortsTransport(t *testing.T) {
 	if writer.closeCalls() != 1 {
 		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
 	}
-	if err := p.lifecycle.admitExternalWrite(); err == nil {
+	if err := p.transport.admitWrite(writeExternal); err == nil {
 		t.Fatal("provider remained open after partial cancellation frame")
 	}
 }
@@ -614,39 +605,73 @@ func TestCancellationNotificationBlockedWriteAbortsTransport(t *testing.T) {
 func TestMethodNotFoundWriteIsAsynchronousAndBounded(t *testing.T) {
 	writer := newCloseBlockingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	p.internalWriteTimeout = 10 * time.Millisecond
+	p.transport.internalWriteTimeout = 10 * time.Millisecond
 	returned := make(chan struct{})
 	go func() {
-		p.respondMethodNotFound(json.RawMessage(`"server-1"`), "unsupported")
+		p.transport.respondMethodNotFound(json.RawMessage(`"server-1"`), "unsupported")
 		close(returned)
 	}()
 	waitSignal(t, returned, "respondMethodNotFound return")
 	waitSignal(t, writer.started, "MethodNotFound write")
 	waitSignal(t, writer.returned, "MethodNotFound writer exit")
-	if err := p.lifecycle.admitExternalWrite(); err == nil {
+	if err := p.transport.admitWrite(writeExternal); err == nil {
 		t.Fatal("provider remained open after blocked MethodNotFound frame")
+	}
+}
+
+func TestServerResponseRemainsWritableWhileClosing(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	if _, started := p.transport.beginClose("1"); !started {
+		t.Fatal("close transition did not start")
+	}
+	if err := p.transport.admitWrite(writeExternal); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("external write admission = %v, want provider closed", err)
+	}
+
+	p.transport.respondMethodNotFound(json.RawMessage(`"server-1"`), "unsupported")
+	deadline := time.Now().Add(time.Second)
+	for len(writer.messageBodies()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	bodies := writer.messageBodies()
+	if len(bodies) != 1 {
+		t.Fatalf("server response frame count = %d, want 1", len(bodies))
+	}
+}
+
+func TestInternalWriteRejectedAfterAbort(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.transport.abort(errors.New("transport failed"))
+
+	if dispatched, err := p.transport.writeMessage(context.Background(), writeExit, rpcNotification{JSONRPC: "2.0", Method: "exit"}); err == nil || dispatched {
+		t.Fatalf("internal write after abort = (%v, %v), want rejected", dispatched, err)
+	}
+	if bodies := writer.messageBodies(); len(bodies) != 0 {
+		t.Fatalf("written frame count = %d, want 0", len(bodies))
 	}
 }
 
 func TestCloseTimesOutWaitingForWriteGate(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	p.shutdownTimeout = 10 * time.Millisecond
+	p.transport.shutdownTimeout = 10 * time.Millisecond
 	var kills atomic.Int32
-	p.killProcess = func() error {
+	p.transport.killProcess = func() error {
 		kills.Add(1)
 		return nil
 	}
-	if err := p.lockWrite(context.Background()); err != nil {
+	if err := p.transport.lockWrite(context.Background()); err != nil {
 		t.Fatalf("hold write gate: %v", err)
 	}
 	result := make(chan error, 1)
 	go func() { result <- p.Close() }()
 	if err := waitError(t, result, "Close waiting for gate"); err != nil {
-		p.unlockWrite()
+		p.transport.unlockWrite()
 		t.Fatalf("Close: %v", err)
 	}
-	p.unlockWrite()
+	p.transport.unlockWrite()
 	if kills.Load() != 1 || writer.closeCalls() != 1 {
 		t.Fatalf("kill calls = %d stdin close calls = %d, want 1 each", kills.Load(), writer.closeCalls())
 	}
@@ -655,7 +680,7 @@ func TestCloseTimesOutWaitingForWriteGate(t *testing.T) {
 func TestCloseTimesOutDuringShutdownWrite(t *testing.T) {
 	writer := newCloseBlockingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	p.shutdownTimeout = 10 * time.Millisecond
+	p.transport.shutdownTimeout = 10 * time.Millisecond
 	result := make(chan error, 1)
 	go func() { result <- p.Close() }()
 	waitSignal(t, writer.started, "shutdown write")
@@ -672,19 +697,19 @@ func TestWaitForProcessKillsAndReapsWithinBounds(t *testing.T) {
 	p := newUnitProvider(&recordingWriteCloser{}, nil)
 	releaseWait := make(chan struct{})
 	waitReturned := make(chan struct{})
-	p.waitProcess = func() error {
+	p.transport.waitProcess = func() error {
 		<-releaseWait
 		close(waitReturned)
 		return nil
 	}
-	p.killProcess = func() error {
+	p.transport.killProcess = func() error {
 		close(releaseWait)
 		return nil
 	}
-	p.killWait = time.Second
+	p.transport.killWait = time.Second
 	finished := make(chan struct{})
 	go func() {
-		p.waitForProcess(10 * time.Millisecond)
+		p.transport.waitForProcess(10 * time.Millisecond)
 		close(finished)
 	}()
 	waitSignal(t, finished, "bounded process wait")
@@ -696,13 +721,13 @@ func TestPartialFrameErrorTerminatesTransport(t *testing.T) {
 	writer := &partialErrorWriteCloser{limit: 8, err: cause}
 	p := newUnitProvider(writer, nil)
 
-	if _, err := p.call(context.Background(), "partial", nil); !errors.Is(err, cause) {
+	if _, err := p.transport.call(context.Background(), "partial", nil); !errors.Is(err, cause) {
 		t.Fatalf("call error = %v, want %v", err, cause)
 	}
 	if writer.closeCalls() != 1 {
 		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
 	}
-	if _, err := p.call(context.Background(), "later", nil); err == nil {
+	if _, err := p.transport.call(context.Background(), "later", nil); err == nil {
 		t.Fatal("later call succeeded on corrupted transport")
 	}
 	if calls := writer.writeCalls(); calls != 1 {
@@ -715,11 +740,11 @@ func TestShortWritesCompleteOneFrame(t *testing.T) {
 	p := newUnitProvider(writer, nil)
 	result := make(chan error, 1)
 	go func() {
-		_, err := p.call(context.Background(), "short", nil)
+		_, err := p.transport.call(context.Background(), "short", nil)
 		result <- err
 	}()
 	writer.waitForFrame(t)
-	if !p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+	if !p.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
 		t.Fatal("response was not delivered")
 	}
 	if err := waitError(t, result, "short-write call"); err != nil {
@@ -735,12 +760,12 @@ func TestCallWriteFailureRemovesPending(t *testing.T) {
 	cause := errors.New("write failed")
 	p := newUnitProvider(&failingWriteCloser{err: cause}, nil)
 
-	if _, err := p.call(context.Background(), "broken", nil); !errors.Is(err, cause) {
+	if _, err := p.transport.call(context.Background(), "broken", nil); !errors.Is(err, cause) {
 		t.Fatalf("call error = %v, want cause %v", err, cause)
 	}
-	p.lifecycle.mu.Lock()
-	pending := len(p.lifecycle.pending)
-	p.lifecycle.mu.Unlock()
+	p.transport.mu.Lock()
+	pending := len(p.transport.pending)
+	p.transport.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("pending request count = %d, want 0", pending)
 	}
@@ -752,7 +777,7 @@ func TestCloseReleasesPendingAndSerializesShutdown(t *testing.T) {
 
 	callErr := make(chan error, 1)
 	go func() {
-		_, err := p.call(context.Background(), "ordinary", nil)
+		_, err := p.transport.call(context.Background(), "ordinary", nil)
 		callErr <- err
 	}()
 	writer.waitForMethod(t, "ordinary")
@@ -774,9 +799,9 @@ func TestCloseReleasesPendingAndSerializesShutdown(t *testing.T) {
 	}
 
 	notifyErr := make(chan error, 1)
-	go func() { notifyErr <- p.notify(context.Background(), "queued", nil) }()
+	go func() { notifyErr <- p.transport.notify(context.Background(), "queued", nil) }()
 	close(writer.releaseShutdown)
-	if !p.lifecycle.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+	if !p.transport.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
 		t.Fatal("shutdown response did not complete internal request")
 	}
 
@@ -803,7 +828,7 @@ func TestCloseAfterReaderFailureSkipsHandshake(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
 	cause := errors.New("reader failed")
-	p.shutdownPending(cause)
+	p.transport.readerFailed(cause)
 
 	if err := p.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -811,7 +836,7 @@ func TestCloseAfterReaderFailureSkipsHandshake(t *testing.T) {
 	if methods := writer.methods(); len(methods) != 0 {
 		t.Fatalf("written methods after reader failure = %v, want none", methods)
 	}
-	if err := p.lifecycle.admitExternalWrite(); !errors.Is(err, cause) {
+	if err := p.transport.admitWrite(writeExternal); !errors.Is(err, cause) {
 		t.Fatalf("preserved connection error = %v, want %v", err, cause)
 	}
 }
@@ -820,9 +845,9 @@ func waitForPendingCount(t *testing.T, p *Provider, want int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		p.lifecycle.mu.Lock()
-		got := len(p.lifecycle.pending)
-		p.lifecycle.mu.Unlock()
+		p.transport.mu.Lock()
+		got := len(p.transport.pending)
+		p.transport.mu.Unlock()
 		if got == want {
 			return
 		}

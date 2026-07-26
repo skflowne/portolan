@@ -1,86 +1,42 @@
 // Package lsp implements core.LanguageProvider against tsgo --lsp -stdio, the
 // native-preview TypeScript language server. It is a thin passthrough: LSP
-// requests in, core types out, with no caching or graph-building of its own
-// (that lives above this package).
+// requests in, core types out, with no caching or graph-building of its own.
 package lsp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/skflowne/portolan/internal/core"
 )
 
-const (
-	// initializeTimeout is more generous: tsgo's first initialize can involve
-	// loading the TS program (tsconfig resolution, parsing), which is slower
-	// than a steady-state definition/references/documentSymbol call.
-	initializeTimeout = 20 * time.Second
-
-	// The shutdown defaults bound the best-effort handshake, graceful process
-	// exit, and reaping after a forced kill.
-	defaultShutdownTimeout = 2 * time.Second
-	defaultExitWait        = 3 * time.Second
-	defaultKillWait        = time.Second
-)
+const initializeTimeout = 20 * time.Second
 
 // Provider is a core.LanguageProvider backed by a tsgo --lsp -stdio
-// subprocess. All exported methods are safe for concurrent use by multiple
-// goroutines.
+// subprocess. All exported methods are safe for concurrent use.
 type Provider struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdoutR *bufio.Reader
-
-	writeGate chan struct{}
-	nextID    atomic.Int64
-
-	lifecycle      transportLifecycle
-	closeOnce      sync.Once
-	closeErr       error
-	abortOnce      sync.Once
-	stdinCloseOnce sync.Once
-	stdinCloseErr  error
-	killProcess    func() error
-	waitProcess    func() error
+	transport *transport
 
 	openMu    sync.Mutex
 	openFiles map[string]*openTransition
 	readFile  func(context.Context, string) ([]byte, error)
-
-	stderrBuf                *stderrBuffer
-	internalWriteTimeout     time.Duration
-	cancellationWriteTimeout time.Duration
-	shutdownTimeout          time.Duration
-	exitWait                 time.Duration
-	killWait                 time.Duration
-	afterFrameDispatch       func()
-	observeCancellation      func(error)
 }
 
-// compile-time assertion that Provider satisfies core.LanguageProvider.
 var _ core.LanguageProvider = (*Provider)(nil)
 
-// New spawns `tsgo --lsp -stdio` (or cfg.TsgoPath if set), performs the LSP
-// initialize/initialized handshake against cfg.ProjectRoot, and returns a
-// ready-to-use Provider. On any failure the subprocess is killed and an error
-// is returned.
+// New starts tsgo and completes the LSP initialize handshake.
 func New(cfg core.Config) (*Provider, error) {
 	tsgoPath := cfg.TsgoPath
 	if tsgoPath == "" {
 		tsgoPath = "tsgo"
 	}
-
 	cmd := exec.Command(tsgoPath, "--lsp", "-stdio")
 
 	stdin, err := cmd.StdinPipe()
@@ -95,46 +51,38 @@ func New(cfg core.Config) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lsp: stderr pipe: %w", err)
 	}
-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("lsp: starting %s --lsp -stdio: %w", tsgoPath, err)
 	}
 
+	stderrBuf := newStderrBuffer()
+	connection := newTransport(transportConfig{
+		input:       stdin,
+		output:      stdout,
+		stderr:      stderrBuf,
+		killProcess: cmd.Process.Kill,
+		waitProcess: cmd.Wait,
+	})
 	p := &Provider{
-		cmd:       cmd,
-		stdin:     stdin,
-		stdoutR:   bufio.NewReader(stdout),
-		lifecycle: newTransportLifecycle(),
+		transport: connection,
 		openFiles: make(map[string]*openTransition),
-		stderrBuf: newStderrBuffer(),
-		writeGate: newWriteGate(),
 		readFile: func(_ context.Context, path string) ([]byte, error) {
 			return os.ReadFile(path)
 		},
-		killProcess:              cmd.Process.Kill,
-		waitProcess:              cmd.Wait,
-		internalWriteTimeout:     defaultInternalWriteTimeout,
-		cancellationWriteTimeout: defaultCancellationWriteTimeout,
-		shutdownTimeout:          defaultShutdownTimeout,
-		exitWait:                 defaultExitWait,
-		killWait:                 defaultKillWait,
 	}
-
-	go p.stderrBuf.drain(stderr)
-	go p.readLoop()
+	go stderrBuf.drain(stderr)
+	go connection.readLoop()
 
 	root, err := filepath.Abs(cfg.ProjectRoot)
 	if err != nil {
-		p.killAndWait()
+		connection.abortAndWait(errProviderClosed)
 		return nil, fmt.Errorf("lsp: resolving project root %q: %w", cfg.ProjectRoot, err)
 	}
 	rootURI := uriFromPath(root)
-
-	if err := initializeProvider(rootURI, filepath.Base(root), p.call, p.notify); err != nil {
-		p.killAndWait()
+	if err := initializeProvider(rootURI, filepath.Base(root), connection.call, connection.notify); err != nil {
+		connection.abortAndWait(errProviderClosed)
 		return nil, err
 	}
-
 	return p, nil
 }
 
@@ -166,15 +114,8 @@ func initializeProvider(rootURI, rootName string, request requestFunc, notify no
 	return nil
 }
 
-// killAndWait force-terminates the subprocess; used on setup failure paths.
-func (p *Provider) killAndWait() {
-	p.abortTransport(errProviderClosed)
-	p.waitForProcess(p.exitWait)
-}
-
-// prepareOpen resolves file to an absolute path, ensures it has been sent to
-// the server via textDocument/didOpen, and returns both the absolute path and
-// its file:// URI.
+// prepareOpen resolves file to an absolute path and sends one canonical
+// textDocument/didOpen before returning its URI.
 func (p *Provider) prepareOpen(ctx context.Context, file string) (absFile, uri string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
@@ -223,14 +164,12 @@ func (p *Provider) readFileContext(ctx context.Context, path string) (string, er
 	}
 }
 
-// ensureOpen elects one opener per file. External work happens outside
-// openMu, so first opens for unrelated files proceed independently.
+// ensureOpen elects one opener per file while unrelated files proceed.
 func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-
 		p.openMu.Lock()
 		transition, exists := p.openFiles[absFile]
 		if !exists {
@@ -277,7 +216,7 @@ func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
 			Text:       text,
 		},
 	}
-	if err := p.notify(ctx, "textDocument/didOpen", params); err != nil {
+	if err := p.transport.notify(ctx, "textDocument/didOpen", params); err != nil {
 		return fmt.Errorf("lsp: didOpen %s: %w", absFile, err), p.retryableOpenError(ctx, err)
 	}
 	return nil, false
@@ -285,10 +224,9 @@ func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
 
 func (p *Provider) retryableOpenError(ctx context.Context, err error) bool {
 	ctxErr := ctx.Err()
-	return ctxErr != nil && errors.Is(err, ctxErr) && p.lifecycle.isOpen()
+	return ctxErr != nil && errors.Is(err, ctxErr) && p.transport.isOpen()
 }
 
-// Definition implements core.LanguageProvider.
 func (p *Provider) Definition(ctx context.Context, file string, pos core.Position) ([]core.Location, error) {
 	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
@@ -298,14 +236,13 @@ func (p *Provider) Definition(ctx context.Context, file string, pos core.Positio
 		TextDocument: textDocumentIdentifier{URI: uri},
 		Position:     lspPosition{Line: pos.Line, Character: pos.Character},
 	}
-	raw, err := p.call(ctx, "textDocument/definition", params)
+	raw, err := p.transport.call(ctx, "textDocument/definition", params)
 	if err != nil {
 		return nil, err
 	}
 	return decodeLocations(ctx, raw)
 }
 
-// References implements core.LanguageProvider.
 func (p *Provider) References(ctx context.Context, file string, pos core.Position, includeDeclaration bool) ([]core.Location, error) {
 	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
@@ -318,168 +255,22 @@ func (p *Provider) References(ctx context.Context, file string, pos core.Positio
 		},
 		Context: referenceContext{IncludeDeclaration: includeDeclaration},
 	}
-	raw, err := p.call(ctx, "textDocument/references", params)
+	raw, err := p.transport.call(ctx, "textDocument/references", params)
 	if err != nil {
 		return nil, err
 	}
 	return decodeLocations(ctx, raw)
 }
 
-// DocumentSymbols implements core.LanguageProvider.
 func (p *Provider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
 	absFile, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
 	params := documentSymbolParams{TextDocument: textDocumentIdentifier{URI: uri}}
-	raw, err := p.call(ctx, "textDocument/documentSymbol", params)
+	raw, err := p.transport.call(ctx, "textDocument/documentSymbol", params)
 	if err != nil {
 		return nil, err
 	}
 	return decodeDocumentSymbols(ctx, raw, absFile)
-}
-
-func isJSONNull(raw json.RawMessage) bool {
-	if len(raw) == 0 {
-		return true
-	}
-	trimmed := string(raw)
-	return trimmed == "null"
-}
-
-func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if isJSONNull(raw) {
-		return nil, nil
-	}
-	return runContextWork(ctx, func() ([]core.Symbol, error) {
-		var syms []lspDocumentSymbol
-		if err := json.Unmarshal(raw, &syms); err != nil {
-			return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
-		}
-		if len(syms) == 0 {
-			return nil, nil
-		}
-
-		out := make([]core.Symbol, 0, len(syms))
-		for _, s := range syms {
-			symbol, err := s.toCoreSymbol(ctx, file)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, symbol)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return out, nil
-	})
-}
-
-// decodeLocations handles the three shapes textDocument/definition and
-// textDocument/references may return: null, Location | Location[], or
-// LocationLink[].
-func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if isJSONNull(raw) {
-		return nil, nil
-	}
-	return runContextWork(ctx, func() ([]core.Location, error) {
-		var list []rawLocation
-		if err := json.Unmarshal(raw, &list); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-			var single rawLocation
-			if err2 := json.Unmarshal(raw, &single); err2 != nil {
-				return nil, fmt.Errorf("lsp: decoding location result: %w", err)
-			}
-			list = []rawLocation{single}
-		}
-		if len(list) == 0 {
-			return nil, nil
-		}
-
-		out := make([]core.Location, 0, len(list))
-		for _, rl := range list {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			loc, ok, err := rl.toLocation()
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				out = append(out, loc)
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if len(out) == 0 {
-			return nil, nil
-		}
-		return out, nil
-	})
-}
-
-func (rl rawLocation) toLocation() (core.Location, bool, error) {
-	uri := rl.URI
-	rng := rl.Range
-	if uri == "" && rl.TargetURI != "" {
-		uri = rl.TargetURI
-		if rl.TargetSelectionRange != nil {
-			rng = rl.TargetSelectionRange
-		} else {
-			rng = rl.TargetRange
-		}
-	}
-	if uri == "" || rng == nil {
-		return core.Location{}, false, nil
-	}
-	path, err := pathFromURI(uri)
-	if err != nil {
-		return core.Location{}, false, err
-	}
-	return core.Location{
-		File:  path,
-		Range: rng.toCoreRange(),
-	}, true, nil
-}
-
-func (r lspRange) toCoreRange() core.Range {
-	return core.Range{
-		Start: core.Position{Line: r.Start.Line, Character: r.Start.Character},
-		End:   core.Position{Line: r.End.Line, Character: r.End.Character},
-	}
-}
-
-func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.Symbol, error) {
-	if err := ctx.Err(); err != nil {
-		return core.Symbol{}, err
-	}
-	var children []core.Symbol
-	if len(s.Children) > 0 {
-		children = make([]core.Symbol, 0, len(s.Children))
-		for _, c := range s.Children {
-			child, err := c.toCoreSymbol(ctx, file)
-			if err != nil {
-				return core.Symbol{}, err
-			}
-			children = append(children, child)
-		}
-	}
-	return core.Symbol{
-		Name:     s.Name,
-		Kind:     core.SymbolKind(symbolKindName(s.Kind)),
-		File:     file,
-		Range:    s.Range.toCoreRange(),
-		SelRange: s.SelectionRange.toCoreRange(),
-		Detail:   s.Detail,
-		Children: children,
-	}, nil
 }

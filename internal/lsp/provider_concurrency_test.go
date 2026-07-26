@@ -342,7 +342,7 @@ func TestSameFileWaiterDoesNotRetryAfterCanceledPartialDidOpen(t *testing.T) {
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("read attempts = %d, want no retry on closed transport", got)
 	}
-	if p.lifecycle.isOpen() {
+	if p.transport.isOpen() {
 		t.Fatal("transport remained open after partial didOpen write")
 	}
 }
@@ -355,7 +355,7 @@ func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
 	p.readFile = func(context.Context, string) ([]byte, error) { return []byte("source"), nil }
 	dispatched := make(chan struct{})
 	releasePublication := make(chan struct{})
-	p.afterFrameDispatch = func() {
+	p.transport.afterFrameDispatch = func() {
 		close(dispatched)
 		<-releasePublication
 	}
@@ -368,7 +368,7 @@ func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
 	if err := waitError(t, result, "didOpen publication"); err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	p.afterFrameDispatch = nil
+	p.transport.afterFrameDispatch = nil
 	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
 		t.Fatalf("cached open: %v", err)
 	}
