@@ -201,54 +201,12 @@ func TestTee_SkipsNilLoggers(t *testing.T) {
 	}
 }
 
-func TestOTELLogger_LogAndClose(t *testing.T) {
-	var buf bytes.Buffer
-	logger, err := NewOTEL(&buf)
-	if err != nil {
-		t.Fatalf("NewOTEL: %v", err)
-	}
-
-	logger.Log(context.Background(), core.Event{
-		SessionID:  "sess-otel",
-		GraphMode:  "graph",
-		Tool:       "find_impls",
-		DurationMs: 42,
-		ResultSize: 3,
-		Truncated:  true,
-		Stale:      false,
-		Generation: 7,
-		Err:        "boom",
-		Extra:      map[string]any{"k": "v"},
-	})
-
-	if err := logger.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	if buf.Len() == 0 {
-		t.Fatalf("expected the stdout exporter to have written span output")
-	}
-	if !bytes.Contains(buf.Bytes(), []byte("find_impls")) {
-		t.Fatalf("exported span output missing tool name, got: %s", buf.String())
-	}
-}
-
-func TestOTELLogger_DefaultsToolNameWhenEmpty(t *testing.T) {
-	var buf bytes.Buffer
-	logger, err := NewOTEL(&buf)
-	if err != nil {
-		t.Fatalf("NewOTEL: %v", err)
-	}
-	defer logger.Close()
-
-	// Must not panic on an empty Tool.
-	logger.Log(context.Background(), core.Event{})
-}
-
-func TestFromConfig_WritesJSONLAndTeesOTEL(t *testing.T) {
+func TestFromConfigWithoutEndpointIsJSONLOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
 
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
 	logger, err := FromConfig(core.Config{
 		JSONLPath: path,
 		SessionID: "default-session",
@@ -256,6 +214,11 @@ func TestFromConfig_WritesJSONLAndTeesOTEL(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
+	}
+	defaulted := logger.(*defaultingLogger)
+	tee := defaulted.inner.(*teeLogger)
+	if len(tee.loggers) != 1 {
+		t.Fatalf("endpoint-absent logger has %d sinks, want JSONL only", len(tee.loggers))
 	}
 
 	// Leave SessionID/GraphMode empty to exercise the defaulting behavior.

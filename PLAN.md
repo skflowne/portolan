@@ -1,6 +1,11 @@
 # PLAN — Build sequence
 
-**Date:** 2026-07-21
+**Date:** 2026-07-26
+
+**2026-07-26 telemetry note:** JSONL is the authoritative bounded local record (512 pending
+records, 50 ms admission bound, 16 KiB record cap, two-second drain/fsync/close bound). OTEL is an
+independent, opt-in OTLP/HTTP mirror with no stdout or implicit-localhost fallback. Loss and sink
+failures are explicit through counters, stderr diagnostics, and shutdown errors.
 **Reads with:** `INITIAL_RESEARCH.md` (evidence), `INTEGRATION_CONSTRAINTS.md` (decisions),
 `EVAL.md` (measurement). This is the how and the order.
 
@@ -131,8 +136,9 @@ Never hang the model. Prototype on tsgo first (TS is target #1), other servers l
 - Tools v0: `find_definition`, `find_references`, `get_outline` — pure LSP passthrough
   (signatures, capped, carry `generation` + `stale` even if trivially fresh).
 - **Path normalizer (WSL ↔ Windows) from the start.**
-- **Telemetry spine (full stack):** JSONL event stream + OTEL exporter + session/`graph_mode`
-  tagging.
+- **Telemetry spine (full stack):** bounded asynchronous JSONL event stream + explicit opt-in
+  OTLP/HTTP exporter + session/`graph_mode` tagging. MCP stdout is protocol-only; telemetry
+  diagnostics use stderr.
 - **Tier A eval scaffold:** retrieval-correctness harness on a pinned TS repo.
 - *Exit:* MCP round-trip works; every call logged; Tier A green on a pinned repo.
 

@@ -8,6 +8,27 @@ import (
 	"testing"
 )
 
+func TestJoinStartupErrorsPreservesPrimaryAndCleanupFailures(t *testing.T) {
+	primary := errors.New("provider start failed")
+	providerClose := errors.New("provider close failed")
+	telemetryClose := errors.New("telemetry close failed")
+	err := joinStartupErrors(
+		primary,
+		cleanupError{"closing provider", providerClose},
+		cleanupError{"closing telemetry", telemetryClose},
+	)
+	for _, want := range []error{primary, providerClose, telemetryClose} {
+		if !errors.Is(err, want) {
+			t.Fatalf("joined error %v does not preserve %v", err, want)
+		}
+	}
+	for _, label := range []string{"closing provider", "closing telemetry"} {
+		if !strings.Contains(err.Error(), label) {
+			t.Fatalf("joined error %q misses %q", err, label)
+		}
+	}
+}
+
 func TestParseConfigHelpDescribesControlSocketDefault(t *testing.T) {
 	var output bytes.Buffer
 	_, err := parseConfigWithOutput([]string{"-h"}, &output)

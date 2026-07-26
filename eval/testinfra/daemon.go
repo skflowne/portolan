@@ -69,6 +69,27 @@ type Config struct {
 	Telemetry     string
 	SessionID     string
 	ControlSocket string
+	Env           map[string]string
+}
+
+func controlledDaemonEnv(overrides map[string]string) []string {
+	controlled := make(map[string]struct{}, len(overrides))
+	for key := range overrides {
+		controlled[key] = struct{}{}
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		_, overridden := controlled[key]
+		if overridden || strings.HasPrefix(key, "OTEL_EXPORTER_OTLP_") || strings.HasPrefix(key, "OTEL_BSP_") || key == "OTEL_SDK_DISABLED" {
+			continue
+		}
+		env = append(env, entry)
+	}
+	for key, value := range overrides {
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 type lockedBuffer struct {
@@ -88,6 +109,17 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
+func (b *lockedBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.buf.Bytes())
+}
+
+type capturingReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
 // Daemon owns one portoland process and its wrapped tsgo child.
 type Daemon struct {
 	Cmd     *exec.Cmd
@@ -96,6 +128,7 @@ type Daemon struct {
 	PIDFile string
 
 	stderr   *lockedBuffer
+	stdout   *lockedBuffer
 	wait     chan struct{}
 	mu       sync.Mutex
 	exitErr  error
@@ -139,15 +172,20 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	}
 	stderr := &lockedBuffer{}
 	cmd := exec.Command(cfg.Binary, args...)
-	cmd.Env = append(os.Environ(),
-		"PORTOLAN_REAL_TSGO="+realTsgo,
-		"PORTOLAN_TSGO_PID_FILE="+pidFile,
-	)
+	envOverrides := make(map[string]string, len(cfg.Env)+2)
+	for key, value := range cfg.Env {
+		envOverrides[key] = value
+	}
+	envOverrides["PORTOLAN_REAL_TSGO"] = realTsgo
+	envOverrides["PORTOLAN_TSGO_PID_FILE"] = pidFile
+	cmd.Env = controlledDaemonEnv(envOverrides)
 	cmd.Stderr = stderr
-	stdout, err := cmd.StdoutPipe()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("opening daemon stdout: %v", err)
 	}
+	stdoutCapture := &lockedBuffer{}
+	stdout := &capturingReadCloser{Reader: io.TeeReader(stdoutPipe, stdoutCapture), Closer: stdoutPipe}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("opening daemon stdin: %v", err)
@@ -155,7 +193,7 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting daemon: %v", err)
 	}
-	d := &Daemon{Cmd: cmd, Stdin: stdin, Stdout: stdout, PIDFile: pidFile, stderr: stderr, wait: make(chan struct{})}
+	d := &Daemon{Cmd: cmd, Stdin: stdin, Stdout: stdout, PIDFile: pidFile, stderr: stderr, stdout: stdoutCapture, wait: make(chan struct{})}
 	go func() {
 		err := cmd.Wait()
 		d.mu.Lock()
@@ -198,6 +236,12 @@ func RequireSupport(t *testing.T) {
 
 // Stderr returns all daemon diagnostics captured so far.
 func (d *Daemon) Stderr() string { return d.stderr.String() }
+
+// StdoutBytes returns the exact MCP stdout bytes consumed through the single reader.
+func (d *Daemon) StdoutBytes() []byte { return d.stdout.Bytes() }
+
+// StdoutString returns the captured MCP stdout as text.
+func (d *Daemon) StdoutString() string { return d.stdout.String() }
 
 // ExitError returns the result from Cmd.Wait after the process exits.
 func (d *Daemon) ExitError() error {

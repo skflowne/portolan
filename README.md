@@ -14,9 +14,14 @@ of how places reach each other, rather than a picture of the terrain.)
 
 **Phase 0 complete** — walking skeleton: a Go daemon (`portoland`) with an MCP stdio server, three
 passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
-provider, deterministic daemon/control-socket/LSP cancellation lifecycle, JSONL telemetry,
-WSL↔Windows path handling, and a Tier A retrieval-correctness gate that drives the real daemon over
-MCP. The repository has **114 automated tests**. **Phase 1 (the staleness barrier) is next.**
+provider, deterministic daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
+with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
+that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed
+on stderr. The repository has **114 automated tests**. **Phase 1 (the staleness barrier) is next.**
+
+Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or the standard base
+`OTEL_EXPORTER_OTLP_ENDPOINT`) to enable the OTLP/HTTP mirror. With neither configured, the daemon
+runs JSONL-only and never connects to an implicit collector.
 
 Docs:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **visual architecture** (Mermaid diagrams): components, request flow, the staleness barrier, package graph, phase roadmap.

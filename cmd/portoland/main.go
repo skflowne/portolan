@@ -39,15 +39,12 @@ func run() error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	// Telemetry: JSONL only. We deliberately do NOT tee OTEL's stdout exporter
-	// here — the MCP protocol owns stdout, and OTEL spans on stdout would
-	// corrupt the JSON-RPC stream. The OTEL sink (telemetry.NewOTEL / FromConfig)
-	// is wired to a non-stdout destination when we add a dashboard (Phase 2);
-	// for Phase 0 the JSONL stream satisfies "every call logged".
 	if cfg.JSONLPath == "" {
 		cfg.JSONLPath = defaultJSONLPath(cfg.ProjectRoot)
 	}
-	logger, err := telemetry.NewJSONL(cfg.JSONLPath)
+	logger, err := telemetry.FromConfig(cfg, func(err error) {
+		log.Printf("portoland: telemetry: %v", err)
+	})
 	if err != nil {
 		cancel()
 		return fmt.Errorf("portoland: opening telemetry stream: %w", err)
@@ -57,9 +54,12 @@ func run() error {
 	// the initialize handshake.
 	provider, err := lsp.New(cfg)
 	if err != nil {
-		_ = logger.Close()
+		cleanupErr := logger.Close()
 		cancel()
-		return fmt.Errorf("portoland: starting language provider: %w", err)
+		return joinStartupErrors(
+			fmt.Errorf("portoland: starting language provider: %w", err),
+			cleanupError{"closing telemetry", cleanupErr},
+		)
 	}
 
 	gen := &core.GenerationCounter{}
@@ -68,10 +68,14 @@ func run() error {
 	sockPath := pmcp.SocketPath(cfg)
 	control := pmcp.NewControlSocket(sockPath, gen)
 	if err := control.Start(ctx); err != nil {
-		_ = provider.Close()
-		_ = logger.Close()
+		providerErr := provider.Close()
+		loggerErr := logger.Close()
 		cancel()
-		return fmt.Errorf("portoland: starting control socket: %w", err)
+		return joinStartupErrors(
+			fmt.Errorf("portoland: starting control socket: %w", err),
+			cleanupError{"closing provider", providerErr},
+			cleanupError{"closing telemetry", loggerErr},
+		)
 	}
 	log.Printf("portoland: control socket listening on %s", sockPath)
 
@@ -146,6 +150,21 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 		ControlSocket: *controlSocket,
 		MaxResults:    *maxResults,
 	}, nil
+}
+
+type cleanupError struct {
+	label string
+	err   error
+}
+
+func joinStartupErrors(primary error, cleanup ...cleanupError) error {
+	errs := []error{primary}
+	for _, item := range cleanup {
+		if item.err != nil {
+			errs = append(errs, fmt.Errorf("portoland: %s: %w", item.label, item.err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func envOr(key, fallback string) string {
