@@ -217,7 +217,10 @@ func (o *OTELLogger) Log(ctx context.Context, ev core.Event) {
 func (e *observedExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	err := e.inner.ExportSpans(ctx, spans)
 	e.owner.finishExport(len(spans), err)
-	return err
+	// The owner has already latched, counted, and dispatched the final exporter
+	// failure. Returning it would make BatchSpanProcessor call the global OTEL
+	// error handler, adding an unbounded duplicate stderr path.
+	return nil
 }
 
 func (e *observedExporter) Shutdown(ctx context.Context) error {

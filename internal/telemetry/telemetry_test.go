@@ -201,6 +201,31 @@ func TestTee_SkipsNilLoggers(t *testing.T) {
 	}
 }
 
+func TestFromConfigPreservesJSONLMarshalFallbackObservability(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	called := make(chan struct{})
+	logger, err := FromConfig(core.Config{JSONLPath: filepath.Join(t.TempDir(), "events.jsonl")}, func(error) {
+		select {
+		case <-called:
+		default:
+			close(called)
+		}
+	})
+	if err != nil {
+		t.Fatalf("FromConfig: %v", err)
+	}
+	logger.Log(context.Background(), core.Event{Tool: "fallback", Extra: map[string]any{"bad": func() {}}})
+	waitFor(t, called, "marshal fallback diagnostic")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	jsonl := logger.(*defaultingLogger).inner.(*teeLogger).loggers[0].(*JSONLLogger)
+	if stats := jsonl.Stats(); stats.MarshalFallbacks != 1 {
+		t.Fatalf("production JSONL MarshalFallbacks = %d, want 1", stats.MarshalFallbacks)
+	}
+}
+
 func TestFromConfigWithoutEndpointIsJSONLOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")

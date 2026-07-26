@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -101,20 +100,40 @@ func snapshotExtra(extra map[string]any) map[string]any {
 	if extra == nil {
 		return nil
 	}
-	encoded, err := json.Marshal(extra)
-	if err == nil {
-		var snapshot map[string]any
-		if json.Unmarshal(encoded, &snapshot) == nil {
-			return snapshot
+	return snapshotMap(extra, 0)
+}
+
+func snapshotMap(input map[string]any, depth int) map[string]any {
+	if depth >= 32 {
+		return input
+	}
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = snapshotValue(value, depth+1)
+	}
+	return output
+}
+
+func snapshotValue(value any, depth int) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return snapshotMap(typed, depth)
+	case []any:
+		if depth >= 32 {
+			return typed
 		}
+		output := make([]any, len(typed))
+		for i := range typed {
+			output[i] = snapshotValue(typed[i], depth+1)
+		}
+		return output
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		// Preserve unsupported values so JSONL can account for and diagnose its
+		// marshal fallback instead of silently sanitizing the production Event.
+		return typed
 	}
-	// Unsupported values still get detached from the caller's map and remain
-	// observable as strings rather than making asynchronous ownership unclear.
-	snapshot := make(map[string]any, len(extra))
-	for key, value := range extra {
-		snapshot[key] = toString(value)
-	}
-	return snapshot
 }
 
 func (d *defaultingLogger) Close() error {

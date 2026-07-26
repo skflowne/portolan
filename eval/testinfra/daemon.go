@@ -115,11 +115,6 @@ func (b *lockedBuffer) Bytes() []byte {
 	return bytes.Clone(b.buf.Bytes())
 }
 
-type capturingReadCloser struct {
-	io.Reader
-	io.Closer
-}
-
 // Daemon owns one portoland process and its wrapped tsgo child.
 type Daemon struct {
 	Cmd     *exec.Cmd
@@ -127,13 +122,14 @@ type Daemon struct {
 	Stdout  io.ReadCloser
 	PIDFile string
 
-	stderr   *lockedBuffer
-	stdout   *lockedBuffer
-	wait     chan struct{}
-	mu       sync.Mutex
-	exitErr  error
-	childPID int
-	cleaned  bool
+	stderr     *lockedBuffer
+	stdout     *lockedBuffer
+	stdoutDone chan struct{}
+	wait       chan struct{}
+	mu         sync.Mutex
+	exitErr    error
+	childPID   int
+	cleaned    bool
 }
 
 // NewDaemon configures and starts a daemon with a PID-recording tsgo wrapper.
@@ -180,20 +176,26 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	envOverrides["PORTOLAN_TSGO_PID_FILE"] = pidFile
 	cmd.Env = controlledDaemonEnv(envOverrides)
 	cmd.Stderr = stderr
-	stdoutPipe, err := cmd.StdoutPipe()
+	stdoutSource, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("opening daemon stdout: %v", err)
+		t.Fatalf("opening daemon stdout pipe: %v", err)
 	}
+	cmd.Stdout = stdoutWriter
 	stdoutCapture := &lockedBuffer{}
-	stdout := &capturingReadCloser{Reader: io.TeeReader(stdoutPipe, stdoutCapture), Closer: stdoutPipe}
+	stdout, stdoutForward := io.Pipe()
+	stdoutDone := make(chan struct{})
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("opening daemon stdin: %v", err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdoutSource.Close()
+		_ = stdoutWriter.Close()
 		t.Fatalf("starting daemon: %v", err)
 	}
-	d := &Daemon{Cmd: cmd, Stdin: stdin, Stdout: stdout, PIDFile: pidFile, stderr: stderr, stdout: stdoutCapture, wait: make(chan struct{})}
+	_ = stdoutWriter.Close()
+	go captureProcessStdout(stdoutSource, stdoutForward, stdoutCapture, stdoutDone)
+	d := &Daemon{Cmd: cmd, Stdin: stdin, Stdout: stdout, PIDFile: pidFile, stderr: stderr, stdout: stdoutCapture, stdoutDone: stdoutDone, wait: make(chan struct{})}
 	go func() {
 		err := cmd.Wait()
 		d.mu.Lock()
@@ -203,6 +205,28 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	}()
 	t.Cleanup(func() { d.Cleanup(t) })
 	return d
+}
+
+func captureProcessStdout(source *os.File, forward *io.PipeWriter, capture *lockedBuffer, done chan<- struct{}) {
+	defer close(done)
+	defer source.Close()
+	defer forward.Close()
+	buffer := make([]byte, 32*1024)
+	forwarding := true
+	for {
+		n, err := source.Read(buffer)
+		if n > 0 {
+			_, _ = capture.Write(buffer[:n])
+			if forwarding {
+				if _, writeErr := forward.Write(buffer[:n]); writeErr != nil {
+					forwarding = false
+				}
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // ConnectMCP initializes an MCP client session over the daemon's stdio pipes.
@@ -242,6 +266,18 @@ func (d *Daemon) StdoutBytes() []byte { return d.stdout.Bytes() }
 
 // StdoutString returns the captured MCP stdout as text.
 func (d *Daemon) StdoutString() string { return d.stdout.String() }
+
+// FinishStdout closes the MCP-facing reader after process exit and waits until
+// the sole source reader has captured the process stream through EOF.
+func (d *Daemon) FinishStdout(timeout time.Duration) bool {
+	_ = d.Stdout.Close()
+	select {
+	case <-d.stdoutDone:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
 
 // ExitError returns the result from Cmd.Wait after the process exits.
 func (d *Daemon) ExitError() error {
@@ -399,6 +435,9 @@ func (d *Daemon) Cleanup(t *testing.T) {
 			_ = killProcess(pid)
 		}
 		_, _ = d.WaitForExit(ShortWait)
+	}
+	if !d.FinishStdout(ShortWait) {
+		t.Errorf("daemon stdout capture did not reach EOF")
 	}
 	if pid != 0 {
 		AssertPIDGone(t, pid)
