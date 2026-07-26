@@ -174,6 +174,26 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 	}
 }
 
+func TestOTELLoggerDefaultsEmptyToolIdentity(t *testing.T) {
+	exporter := &capturingExporter{}
+	logger := testOTEL(t, exporter, nil)
+	logger.Log(context.Background(), core.Event{})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	spans := exporter.snapshot()
+	if len(spans) != 1 {
+		t.Fatalf("exported spans = %d, want 1", len(spans))
+	}
+	if got := spans[0].Name; got != "unknown_tool" {
+		t.Fatalf("span name = %q, want unknown_tool", got)
+	}
+	if got := attributesByName(spans[0].Attributes)["tool"].AsString(); got != "unknown_tool" {
+		t.Fatalf("tool attribute = %q, want unknown_tool", got)
+	}
+}
+
 func TestOTELLoggerObservableSaturationDoesNotBlock(t *testing.T) {
 	exporter := &controlledExporter{exportStarted: make(chan struct{}), exportGate: make(chan struct{})}
 	gate := exporter.exportGate

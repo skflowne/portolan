@@ -198,7 +198,7 @@ func (o *OTELLogger) logSnapshot(ctx context.Context, snapshot eventSnapshot) {
 	attrs := []attribute.KeyValue{
 		attribute.String("session_id", ev.SessionID),
 		attribute.String("graph_mode", ev.GraphMode),
-		attribute.String("tool", ev.Tool),
+		attribute.String("tool", name),
 		attribute.Int64("duration_ms", ev.DurationMs),
 		attribute.Int("result_size", ev.ResultSize),
 		attribute.Bool("truncated", ev.Truncated),
