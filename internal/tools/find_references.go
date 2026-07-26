@@ -34,6 +34,9 @@ type FindReferencesOutput struct {
 // then calls provider.References with includeDeclaration=true. See the
 // package doc for the shared found/error/cap/freshness/telemetry contract.
 func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (FindReferencesOutput, error) {
+	ctx, cancel := t.operationContext(ctx)
+	defer cancel()
+
 	start := time.Now()
 	fresh := t.Gen.Current()
 	out := FindReferencesOutput{Freshness: fresh}

@@ -32,22 +32,37 @@ import (
 // (StubProvider in Phase 0, internal/lsp.Provider from Wave 2), the shared
 // freshness counter, the telemetry sink, and the config (for Cap/SessionID/
 // GraphMode).
+const defaultOperationTimeout = 5 * time.Second
+
 type Tools struct {
 	Provider core.LanguageProvider
 	Gen      *core.GenerationCounter
 	Logger   core.Logger
 	Cfg      core.Config
+
+	operationTimeout time.Duration
 }
 
 // New builds a Tools. gen and logger must not be nil; use core.NopLogger{}
 // for a discarding logger and a fresh core.GenerationCounter{} in tests.
 func New(provider core.LanguageProvider, gen *core.GenerationCounter, logger core.Logger, cfg core.Config) *Tools {
 	return &Tools{
-		Provider: provider,
-		Gen:      gen,
-		Logger:   logger,
-		Cfg:      cfg,
+		Provider:         provider,
+		Gen:              gen,
+		Logger:           logger,
+		Cfg:              cfg,
+		operationTimeout: defaultOperationTimeout,
 	}
+}
+
+// operationContext establishes the one budget for a complete tool invocation.
+// Provider implementations must consume this context without resetting it.
+func (t *Tools) operationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := t.operationTimeout
+	if timeout <= 0 {
+		timeout = defaultOperationTimeout
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // callTimer starts the bookkeeping shared by every tool method: it captures

@@ -35,6 +35,9 @@ type FindDefinitionOutput struct {
 // then calls provider.Definition. See the package doc for the shared
 // found/error/cap/freshness/telemetry contract.
 func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (FindDefinitionOutput, error) {
+	ctx, cancel := t.operationContext(ctx)
+	defer cancel()
+
 	start := time.Now()
 	fresh := t.Gen.Current()
 	out := FindDefinitionOutput{Freshness: fresh}
