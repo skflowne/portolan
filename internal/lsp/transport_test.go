@@ -22,6 +22,7 @@ func newUnitProvider(stdin io.WriteCloser, stdout io.Reader) *Provider {
 		stdoutR:   bufio.NewReader(stdout),
 		lifecycle: newTransportLifecycle(),
 		stderrBuf: newStderrBuffer(),
+		writeGate: newWriteGate(),
 		timeout:   time.Second,
 	}
 }

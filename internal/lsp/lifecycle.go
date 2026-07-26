@@ -175,9 +175,9 @@ func (p *Provider) close() error {
 	shutdownMessage := rpcRequest{JSONRPC: "2.0", ID: id, Method: "shutdown", Params: nil}
 	data, marshalErr := marshalMessage(shutdownMessage)
 
-	// Holding writeMu across admission closure and the shutdown frame ensures
-	// every admitted external frame precedes shutdown.
-	p.writeMu.Lock()
+	// Holding the write gate across admission closure and the shutdown frame
+	// ensures every admitted external frame precedes shutdown.
+	_ = p.lockWrite(context.Background())
 	shutdown, started := p.lifecycle.beginClose(key)
 	var writeErr error
 	if started {
@@ -187,7 +187,7 @@ func (p *Provider) close() error {
 			writeErr = p.writeFrameLocked(data)
 		}
 	}
-	p.writeMu.Unlock()
+	p.unlockWrite()
 
 	if started {
 		if writeErr != nil {
