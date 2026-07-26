@@ -3,44 +3,83 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"time"
 
 	"github.com/skflowne/portolan/internal/core"
 )
 
+type deadlineCloser interface {
+	closeBy(time.Time) error
+}
+
 // teeLogger fans one Event out to every wrapped Logger.
 type teeLogger struct {
 	loggers []core.Logger
+
+	closeOnce   sync.Once
+	closeResult error
 }
 
-// Tee returns a core.Logger that forwards every Log call to all of loggers,
-// and whose Close closes all of them (collecting any errors). Nil loggers
-// are skipped.
+// Tee returns a logger that forwards to every non-nil sink.
 func Tee(loggers ...core.Logger) core.Logger {
 	filtered := make([]core.Logger, 0, len(loggers))
-	for _, l := range loggers {
-		if l != nil {
-			filtered = append(filtered, l)
+	for _, logger := range loggers {
+		if logger != nil {
+			filtered = append(filtered, logger)
 		}
 	}
 	return &teeLogger{loggers: filtered}
 }
 
-// Log forwards ev to every wrapped logger.
 func (t *teeLogger) Log(ctx context.Context, ev core.Event) {
-	for _, l := range t.loggers {
-		l.Log(ctx, ev)
+	for _, logger := range t.loggers {
+		logger.Log(ctx, ev)
 	}
 }
 
-// Close closes every wrapped logger, returning a joined error if any fail.
+// Close starts all sink shutdowns together. Owned telemetry sinks receive one
+// shared absolute deadline; an unknown sink is still prevented from hanging
+// the composite indefinitely.
 func (t *teeLogger) Close() error {
-	var errs []error
-	for _, l := range t.loggers {
-		if err := l.Close(); err != nil {
-			errs = append(errs, err)
+	t.closeOnce.Do(func() {
+		deadline := time.Now().Add(defaultTelemetryCloseTimeout)
+		results := make(chan error, len(t.loggers))
+		for _, logger := range t.loggers {
+			go func() {
+				if closer, ok := logger.(deadlineCloser); ok {
+					results <- closer.closeBy(deadline)
+					return
+				}
+				results <- logger.Close()
+			}()
 		}
-	}
-	return errors.Join(errs...)
+
+		var errs []error
+		for range t.loggers {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				errs = append(errs, fmt.Errorf("telemetry: composite shutdown timeout"))
+				break
+			}
+			timer := time.NewTimer(remaining)
+			select {
+			case err := <-results:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				errs = append(errs, err)
+			case <-timer.C:
+				errs = append(errs, fmt.Errorf("telemetry: composite shutdown timeout"))
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+		}
+		t.closeResult = errors.Join(errs...)
+	})
+	return t.closeResult
 }
 
 var _ core.Logger = (*teeLogger)(nil)

@@ -33,12 +33,14 @@ flowchart TB
         Prov{{"LanguageProvider<br/>(interface)"}}
         LSP["lsp.Provider<br/>tsgo --lsp client"]
         Path["pathnorm<br/>WSL ↔ Windows"]
-        Tel["telemetry<br/>JSONL now · +OTEL later"]
+        Tel["telemetry<br/>bounded JSONL · opt-in OTLP/HTTP"]
     end
 
     Tsgo["tsgo --lsp -stdio<br/>(subprocess)"]
     Files[("source files")]
     JSONL[["telemetry.jsonl"]]
+    OTLP["OTLP/HTTP collector<br/>(explicit endpoint only)"]
+    Stderr[["stderr diagnostics"]]
 
     Model -->|"(1) MCP tool calls"| MCP
     Hooks -->|"(2) 'file X changed: sync + wait'"| Ctl
@@ -52,10 +54,12 @@ flowchart TB
     Tsgo -.reads.-> Files
     Ctl --> Gen
     Tel --> JSONL
+    Tel -. independent bounded mirror .-> OTLP
+    Tel -. failures and loss .-> Stderr
 
     classDef built fill:#1f6f43,stroke:#0f3,color:#fff;
     classDef scaffold fill:#7a5c00,stroke:#fc0,color:#fff;
-    class Model,Hooks,MCP,Tools,Gen,Prov,LSP,Path,Tel,Tsgo built;
+    class Model,Hooks,MCP,Tools,Gen,Prov,LSP,Path,Tel,Tsgo,JSONL,OTLP,Stderr built;
     class Ctl scaffold;
 ```
 
@@ -91,7 +95,7 @@ sequenceDiagram
     participant P as lsp.Provider
     participant R as lsp.transport<br/>(write gate · lifecycle · reader)
     participant G as tsgo LSP
-    participant L as JSONL log
+    participant L as Telemetry owner
 
     M->>S: tools/call find_definition {file, symbol}
     S->>T: FindDefinition(in)
@@ -116,10 +120,18 @@ sequenceDiagram
     R-->>P: demultiplexed response
     P-->>T: []core.Location
     T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
-    T->>L: emit exactly one Event (tool, duration, size, …)
+    T->>L: admit exactly one Event (tool, duration, size, …)
+    L-->>L: bounded FIFO → JSONL writer<br/>+ independent OTLP batch mirror
     T-->>S: FindDefinitionOutput{found, locations, freshness}
     S-->>M: structured result
 ```
+
+Telemetry admission snapshots each Event once before fan-out. JSONL is authoritative: one writer
+owns a 512-record FIFO, waits at most 50 ms for capacity, preserves accepted-record order, and caps
+serialized records at 16 KiB. Shutdown stops admission, drains, fsyncs, and closes within one shared
+two-second lifecycle bound. OTLP/HTTP is enabled only by an explicit standard endpoint environment
+variable and uses an independent bounded batch processor. Loss and sink failures are counted, joined
+into shutdown errors, and diagnosed on stderr; MCP stdout remains protocol-only.
 
 The **tools layer owns one fixed 5-second operation budget** for the complete invocation. The same
 context covers path preparation, first-open disk reads and `didOpen`, name resolution, both provider
@@ -217,7 +229,8 @@ flowchart LR
 ```
 
 The daemon wires the seam: `cmd/portoland` swaps the `StubProvider` for `lsp.New(cfg)` and the
-`NopLogger` for a JSONL logger — the only two lines that know the concrete implementations.
+`NopLogger` for `telemetry.FromConfig`. The telemetry owner always creates bounded JSONL and adds
+OTLP/HTTP only when a standard OTLP endpoint is explicitly configured.
 
 ---
 

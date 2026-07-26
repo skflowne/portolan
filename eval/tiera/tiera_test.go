@@ -194,8 +194,8 @@ func TestTierA(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		if len(lines) < 4 {
-			t.Fatalf("expected >=4 telemetry events (one per tool call), got %d: %v", len(lines), lines)
+		if len(lines) != 4 {
+			t.Fatalf("expected exactly 4 telemetry events (one per completed tool call), got %d: %v", len(lines), lines)
 		}
 		seen := map[string]int{}
 		for _, l := range lines {
@@ -206,9 +206,10 @@ func TestTierA(t *testing.T) {
 				t.Errorf("telemetry event missing timestamp: %v", l)
 			}
 		}
-		for _, want := range []string{"get_outline", "find_references", "find_definition"} {
-			if seen[want] == 0 {
-				t.Errorf("no telemetry event for tool %q (saw %v)", want, seen)
+		wantCounts := map[string]int{"get_outline": 2, "find_references": 1, "find_definition": 1}
+		for tool, want := range wantCounts {
+			if seen[tool] != want {
+				t.Errorf("telemetry count for %q = %d, want %d (saw %v)", tool, seen[tool], want, seen)
 			}
 		}
 	})
