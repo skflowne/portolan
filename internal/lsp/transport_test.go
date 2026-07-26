@@ -645,8 +645,21 @@ func TestInternalWriteRejectedAfterAbort(t *testing.T) {
 	p := newUnitProvider(writer, nil)
 	p.transport.abort(errors.New("transport failed"))
 
-	if dispatched, err := p.transport.writeMessage(context.Background(), writeExit, rpcNotification{JSONRPC: "2.0", Method: "exit"}); err == nil || dispatched {
-		t.Fatalf("internal write after abort = (%v, %v), want rejected", dispatched, err)
+	writes := []struct {
+		name    string
+		policy  writePolicy
+		message any
+	}{
+		{name: "shutdown", policy: writeShutdown, message: rpcRequest{JSONRPC: "2.0", ID: 1, Method: "shutdown"}},
+		{name: "exit", policy: writeExit, message: rpcNotification{JSONRPC: "2.0", Method: "exit"}},
+	}
+	for _, write := range writes {
+		t.Run(write.name, func(t *testing.T) {
+			dispatched, err := p.transport.writeMessage(context.Background(), write.policy, write.message)
+			if err == nil || dispatched {
+				t.Fatalf("internal write after abort = (%v, %v), want rejected", dispatched, err)
+			}
+		})
 	}
 	if bodies := writer.messageBodies(); len(bodies) != 0 {
 		t.Fatalf("written frame count = %d, want 0", len(bodies))

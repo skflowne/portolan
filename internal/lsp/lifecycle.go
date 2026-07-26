@@ -59,7 +59,7 @@ func (t *transport) close() error {
 			if marshalErr != nil {
 				writeErr = marshalErr
 			} else {
-				_, writeErr = t.writeFrameLocked(ctx, data)
+				_, writeErr = t.writeAdmittedFrameLocked(ctx, writeShutdown, data)
 			}
 		}
 		t.unlockWrite()
