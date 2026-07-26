@@ -211,6 +211,7 @@ func TestLiveSameFileWaitersRetryCanceledOwner(t *testing.T) {
 	}, writer)
 
 	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
 	owner := make(chan error, 1)
 	go func() { owner <- p.ensureOpen(ownerCtx, "/repo/a.ts") }()
 	waitSignal(t, ownerStarted, "owner read")
@@ -261,6 +262,9 @@ func TestSameFileWaitersDoNotRetryNonContextFailure(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	ownerStarted := make(chan struct{})
 	releaseOwner := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseOwner) }) }
+	defer release()
 	errRead := errors.New("read failed")
 	var reads atomic.Int32
 	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
@@ -279,7 +283,7 @@ func TestSameFileWaitersDoNotRetryNonContextFailure(t *testing.T) {
 	waiter := make(chan error, 1)
 	go func() { waiter <- p.ensureOpen(waiterCtx, "/repo/a.ts") }()
 	waitSignal(t, waiterCtx.waiting, "same-file transition wait")
-	close(releaseOwner)
+	release()
 
 	if err := waitError(t, owner, "failed open owner"); !errors.Is(err, errRead) {
 		t.Fatalf("owner error = %v, want %v", err, errRead)
@@ -301,6 +305,46 @@ func TestSameFileWaitersDoNotRetryNonContextFailure(t *testing.T) {
 		t.Fatalf("read attempts after independent retry = %d, want 2", got)
 	}
 	writer.waitForMethod(t, "textDocument/didOpen")
+}
+
+func TestSameFileWaiterDoesNotRetryAfterCanceledPartialDidOpen(t *testing.T) {
+	writer := newCloseBlockingWriteCloser()
+	defer writer.Close()
+	p := newUnitProvider(writer, nil)
+	p.openFiles = make(map[string]*openTransition)
+	var reads atomic.Int32
+	p.readFile = func(context.Context, string) ([]byte, error) {
+		reads.Add(1)
+		return []byte("source"), nil
+	}
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+	owner := make(chan error, 1)
+	go func() { owner <- p.ensureOpen(ownerCtx, "/repo/a.ts") }()
+	waitSignal(t, writer.started, "partial didOpen write")
+
+	waiterCtx := newObservedWaitContext()
+	waiter := make(chan error, 1)
+	go func() { waiter <- p.ensureOpen(waiterCtx, "/repo/a.ts") }()
+	waitSignal(t, waiterCtx.waiting, "same-file transition wait")
+	cancelOwner()
+
+	ownerErr := waitError(t, owner, "partial didOpen owner")
+	if ownerErr == nil {
+		t.Fatal("owner returned no error after partial didOpen cancellation")
+	}
+	waiterErr := waitError(t, waiter, "partial didOpen waiter")
+	if waiterErr == nil || waiterErr.Error() != ownerErr.Error() {
+		t.Fatalf("waiter error = %v, want owner transition error %v", waiterErr, ownerErr)
+	}
+	waitSignal(t, writer.returned, "partial didOpen writer cleanup")
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("read attempts = %d, want no retry on closed transport", got)
+	}
+	if p.lifecycle.isOpen() {
+		t.Fatal("transport remained open after partial didOpen write")
+	}
 }
 
 func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
