@@ -28,12 +28,12 @@ import (
 	"github.com/skflowne/portolan/internal/pathnorm"
 )
 
+const defaultOperationTimeout = 5 * time.Second
+
 // Tools holds everything the three tool methods need: the language provider
 // (StubProvider in Phase 0, internal/lsp.Provider from Wave 2), the shared
 // freshness counter, the telemetry sink, and the config (for Cap/SessionID/
 // GraphMode).
-const defaultOperationTimeout = 5 * time.Second
-
 type Tools struct {
 	Provider core.LanguageProvider
 	Gen      *core.GenerationCounter

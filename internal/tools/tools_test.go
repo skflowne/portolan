@@ -505,21 +505,25 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 			logger := &capturingLogger{}
 			tl := newTestTools(provider, logger, core.Config{})
 			ctx, cancel := context.WithCancel(context.Background())
-			result := make(chan struct {
-				errText string
-				err     error
-			}, 1)
+			defer cancel()
+			result := make(chan toolCallResult, 1)
 			go func() {
 				errText, err := tc.call(ctx, tl)
-				result <- struct {
-					errText string
-					err     error
-				}{errText: errText, err: err}
+				result <- toolCallResult{errText: errText, err: err}
 			}()
 
-			<-provider.entered
+			select {
+			case <-provider.entered:
+			case <-time.After(time.Second):
+				t.Fatal("provider stage was not entered")
+			}
 			cancel()
-			got := <-result
+			var got toolCallResult
+			select {
+			case got = <-result:
+			case <-time.After(time.Second):
+				t.Fatal("tool did not return after cancellation")
+			}
 			if got.err != nil {
 				t.Fatalf("tool returned Go error: %v", got.err)
 			}
@@ -538,6 +542,11 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
+type toolCallResult struct {
+	errText string
+	err     error
 }
 
 type contextRecordingProvider struct {
