@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -50,10 +49,9 @@ type Provider struct {
 	writeMu sync.Mutex
 	nextID  atomic.Int64
 
-	pendingMu sync.Mutex
-	pending   map[string]chan *jsonrpcMessage
-	closed    bool
-	connErr   error
+	lifecycle transportLifecycle
+	closeOnce sync.Once
+	closeErr  error
 
 	openMu    sync.Mutex
 	openFiles map[string]bool
@@ -98,7 +96,7 @@ func New(cfg core.Config) (*Provider, error) {
 		cmd:       cmd,
 		stdin:     stdin,
 		stdoutR:   bufio.NewReader(stdout),
-		pending:   make(map[string]chan *jsonrpcMessage),
+		lifecycle: newTransportLifecycle(),
 		openFiles: make(map[string]bool),
 		stderrBuf: newStderrBuffer(),
 		timeout:   defaultRequestTimeout,
@@ -261,38 +259,6 @@ func (p *Provider) DocumentSymbols(ctx context.Context, file string) ([]core.Sym
 		out = append(out, s.toCoreSymbol(absFile))
 	}
 	return out, nil
-}
-
-// Close shuts the LSP server down (best-effort shutdown/exit handshake, then
-// kills the subprocess if it doesn't exit on its own) and releases any
-// goroutines blocked in call(). Safe to call more than once.
-func (p *Provider) Close() error {
-	p.pendingMu.Lock()
-	alreadyClosed := p.closed
-	p.pendingMu.Unlock()
-
-	if !alreadyClosed {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		_, _ = p.call(ctx, "shutdown", nil)
-		cancel()
-		_ = p.notify("exit", nil)
-	}
-
-	_ = p.stdin.Close()
-
-	if p.cmd != nil && p.cmd.Process != nil {
-		done := make(chan error, 1)
-		go func() { done <- p.cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(exitWait):
-			_ = p.cmd.Process.Kill()
-			<-done
-		}
-	}
-
-	p.shutdownPending(errors.New("lsp: provider closed"))
-	return nil
 }
 
 func isJSONNull(raw json.RawMessage) bool {

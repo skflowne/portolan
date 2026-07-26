@@ -50,19 +50,44 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// writeMessage marshals v and writes it to w framed with a Content-Length
-// header, under writeMu so concurrent callers don't interleave frames.
-func (p *Provider) writeMessage(v any) error {
+func marshalMessage(v any) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("lsp: marshaling message: %w", err)
+		return nil, fmt.Errorf("lsp: marshaling message: %w", err)
+	}
+	return data, nil
+}
+
+// writeMessage admits and writes an external request or notification while
+// holding writeMu, so Close cannot place shutdown ahead of an admitted frame.
+func (p *Provider) writeMessage(v any) error {
+	data, err := marshalMessage(v)
+	if err != nil {
+		return err
 	}
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	if err := p.lifecycle.admitExternalWrite(); err != nil {
+		return err
+	}
+	return p.writeFrameLocked(data)
+}
+
+func (p *Provider) writeInternalMessage(v any) error {
+	data, err := marshalMessage(v)
+	if err != nil {
+		return err
+	}
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return p.writeFrameLocked(data)
+}
+
+func (p *Provider) writeFrameLocked(data []byte) error {
 	if _, err := fmt.Fprintf(p.stdin, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
 		return err
 	}
-	_, err = p.stdin.Write(data)
+	_, err := p.stdin.Write(data)
 	return err
 }
 
@@ -70,71 +95,42 @@ func (p *Provider) writeMessage(v any) error {
 // ctx is done, or the per-request timeout elapses. It never hangs the caller
 // past that bound.
 func (p *Provider) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	p.pendingMu.Lock()
-	if p.closed {
-		err := p.connErr
-		p.pendingMu.Unlock()
-		if err == nil {
-			err = errors.New("lsp: provider closed")
-		}
-		return nil, err
-	}
 	id := p.nextID.Add(1)
 	key := strconv.FormatInt(id, 10)
-	ch := make(chan *jsonrpcMessage, 1)
-	p.pending[key] = ch
-	p.pendingMu.Unlock()
-
-	defer func() {
-		p.pendingMu.Lock()
-		delete(p.pending, key)
-		p.pendingMu.Unlock()
-	}()
+	request, err := p.lifecycle.register(key)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := p.writeMessage(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
-		return nil, fmt.Errorf("lsp: writing request %s: %w", method, err)
+		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", err)})
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-
-	select {
-	case msg, ok := <-ch:
-		if !ok || msg == nil {
-			p.pendingMu.Lock()
-			cerr := p.connErr
-			p.pendingMu.Unlock()
-			if cerr == nil {
-				cerr = errors.New("lsp: connection closed")
-			}
-			return nil, fmt.Errorf("lsp: %s: %w", method, cerr)
-		}
-		if msg.Error != nil {
-			return nil, fmt.Errorf("lsp: %s: server error %d: %s", method, msg.Error.Code, msg.Error.Message)
-		}
-		return msg.Result, nil
-	case <-reqCtx.Done():
-		return nil, fmt.Errorf("lsp: %s: %w", method, reqCtx.Err())
+	result := p.waitPending(reqCtx, key, request)
+	if result.err != nil {
+		return nil, fmt.Errorf("lsp: %s: %w", method, result.err)
 	}
+	if result.message == nil {
+		return nil, fmt.Errorf("lsp: %s: connection closed", method)
+	}
+	if result.message.Error != nil {
+		return nil, fmt.Errorf("lsp: %s: server error %d: %s", method, result.message.Error.Code, result.message.Error.Message)
+	}
+	return result.message.Result, nil
 }
 
 // notify sends a JSON-RPC notification (no response expected).
 func (p *Provider) notify(method string, params any) error {
-	p.pendingMu.Lock()
-	closed := p.closed
-	cerr := p.connErr
-	p.pendingMu.Unlock()
-	if closed {
-		if cerr != nil {
-			return fmt.Errorf("lsp: %s: %w", method, cerr)
-		}
-		return fmt.Errorf("lsp: %s: provider closed", method)
+	if err := p.writeMessage(rpcNotification{JSONRPC: "2.0", Method: method, Params: params}); err != nil {
+		return fmt.Errorf("lsp: %s: %w", method, err)
 	}
-	return p.writeMessage(rpcNotification{JSONRPC: "2.0", Method: method, Params: params})
+	return nil
 }
 
 // readLoop is the single background reader: it demuxes incoming frames by
-// JSON-RPC id into the pending map's per-request channels. It runs for the
+// JSON-RPC id into per-request lifecycle entries. It runs for the
 // lifetime of the subprocess and exits (marking the provider closed) on any
 // read/decode error, most commonly EOF when the process exits.
 func (p *Provider) readLoop() {
@@ -167,14 +163,8 @@ func (p *Provider) readLoop() {
 			// Notification from the server (e.g. window/logMessage,
 			// textDocument/publishDiagnostics). Nothing to do with it yet.
 		case len(msg.ID) > 0:
-			key := string(msg.ID)
-			p.pendingMu.Lock()
-			ch, ok := p.pending[key]
-			p.pendingMu.Unlock()
-			if ok {
-				m := msg
-				ch <- &m
-			}
+			m := msg
+			p.lifecycle.deliverResponse(string(msg.ID), &m)
 		}
 	}
 }
@@ -190,17 +180,7 @@ func (p *Provider) respondMethodNotFound(id json.RawMessage, method string) {
 // shutdownPending marks the provider closed and releases every goroutine
 // currently blocked in call() with cerr.
 func (p *Provider) shutdownPending(cerr error) {
-	p.pendingMu.Lock()
-	defer p.pendingMu.Unlock()
-	if p.closed {
-		return
-	}
-	p.closed = true
-	p.connErr = cerr
-	for id, ch := range p.pending {
-		close(ch)
-		delete(p.pending, id)
-	}
+	p.lifecycle.shutdown(cerr)
 }
 
 // stderrBuffer captures the subprocess's recent stderr output so transport
