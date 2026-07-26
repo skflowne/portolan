@@ -94,13 +94,18 @@ sequenceDiagram
 
     M->>S: tools/call find_definition {file, symbol}
     S->>T: FindDefinition(in)
+    T->>T: establish one 5s operation context
     T->>T: normFile(file) — pathnorm (C:\… → /mnt/c/…)
-    T->>P: DocumentSymbols(file)
+    T->>P: DocumentSymbols(file, operation context)
+    opt first query for this file
+        P->>P: read file under per-file open transition
+        P->>G: textDocument/didOpen
+    end
     P->>G: textDocument/documentSymbol
     G-->>P: symbol tree
     P-->>T: []Symbol
     T->>T: resolve name → Position (SelRange.Start)
-    T->>P: Definition(file, pos)
+    T->>P: Definition(file, pos, same operation context)
     P->>G: textDocument/definition
     G-->>P: Location[]
     P-->>T: []core.Location
@@ -110,13 +115,21 @@ sequenceDiagram
     S-->>M: structured result
 ```
 
+The **tools layer owns one fixed 5-second operation budget** for the complete invocation. The same
+context covers path preparation, first-open disk reads and `didOpen`, name resolution, both provider
+requests, serialization, pipe writes, and response waits; the provider does not reset the deadline
+between stages. Provider initialization keeps its separate 20-second budget for project loading.
+
 The `lsp.Provider` is concurrency-safe: one background reader goroutine demuxes responses by
 JSON-RPC id into per-request lifecycle entries that accept exactly one terminal response or error.
-Response delivery, timeout cleanup, connection failure, and explicit close share that owner, so late
-responses are ignored without closing a delivery channel. Writes and close admission are serialized,
-and every call is bounded by a timeout so the model is never left hanging. The provider also answers
-tsgo's server-initiated `client/registerCapability` request (which carries a *string* id) with
-`MethodNotFound` — otherwise tsgo stalls its whole request queue waiting for a reply.
+Response delivery, cancellation cleanup, connection failure, and explicit close share that owner,
+so late responses are ignored. Per-file open transitions retain one canonical `didOpen` while
+allowing unrelated files to read concurrently. A context-aware write gate serializes complete frames;
+cancellation before dispatch writes nothing, cancellation after dispatch removes the pending request
+and sends `$/cancelRequest`, and cancellation during a blocked or partial frame closes the pipe and
+kills the now-unusable subprocess. Server-initiated requests such as `client/registerCapability`
+are answered asynchronously within a bounded internal-write budget, so they cannot stall response
+demultiplexing.
 
 ---
 
