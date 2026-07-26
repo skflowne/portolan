@@ -5,6 +5,7 @@ target/
 *.log
 .DS_Store
 scratch/
+.pi-subagents/
 
 # Go daemon build artifact (built at repo root by `go build ./cmd/portoland`)
 /portoland
