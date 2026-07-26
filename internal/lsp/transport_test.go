@@ -272,8 +272,18 @@ func TestCallTimeoutRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 }
 
 func TestResponseConversionsHonorContext(t *testing.T) {
+	t.Run("canceled_null", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := decodeLocations(ctx, json.RawMessage(`null`)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("decodeLocations error = %v, want context canceled", err)
+		}
+		if _, err := decodeDocumentSymbols(ctx, json.RawMessage(`null`), "/repo/a.ts"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("decodeDocumentSymbols error = %v, want context canceled", err)
+		}
+	})
 	t.Run("locations", func(t *testing.T) {
-		ctx := newCancelOnErrCheckContext(4)
+		ctx := newCancelOnErrCheckContext(6)
 		raw := json.RawMessage(`[
 			{"uri":"file:///repo/a.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
 			{"uri":"file:///repo/b.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}
@@ -283,7 +293,7 @@ func TestResponseConversionsHonorContext(t *testing.T) {
 		}
 	})
 	t.Run("document_symbols", func(t *testing.T) {
-		ctx := newCancelOnErrCheckContext(4)
+		ctx := newCancelOnErrCheckContext(5)
 		raw := json.RawMessage(`[
 			{"name":"A","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
 			{"name":"B","kind":12,"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"selectionRange":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}}

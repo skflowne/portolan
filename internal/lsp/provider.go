@@ -331,6 +331,9 @@ func unmarshalContext(ctx context.Context, raw json.RawMessage, dst any) error {
 }
 
 func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if isJSONNull(raw) {
 		return nil, nil
 	}
@@ -351,6 +354,9 @@ func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string
 		}
 		out = append(out, symbol)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -358,6 +364,9 @@ func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string
 // textDocument/references may return: null, Location | Location[], or
 // LocationLink[].
 func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if isJSONNull(raw) {
 		return nil, nil
 	}
@@ -382,21 +391,29 @@ func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location,
 
 	out := make([]core.Location, 0, len(list))
 	for _, rl := range list {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		loc, ok, err := rl.toLocation()
+		converted, err := runContextWork(ctx, func() (locationResult, error) {
+			loc, ok, err := rl.toLocation()
+			return locationResult{location: loc, ok: ok}, err
+		})
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			out = append(out, loc)
+		if converted.ok {
+			out = append(out, converted.location)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+type locationResult struct {
+	location core.Location
+	ok       bool
 }
 
 func (rl rawLocation) toLocation() (core.Location, bool, error) {
