@@ -260,9 +260,13 @@ func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 	a := &fakeLogger{}
 	b := &fakeLogger{}
 	logger := &defaultingLogger{inner: Tee(a, b), sessionID: "default-session", graphMode: "graph"}
-	extra := map[string]any{"nested": []any{"before"}}
+	numbers := []int{1}
+	labels := map[string]string{"state": "before"}
+	extra := map[string]any{"nested": []any{"before"}, "numbers": numbers, "labels": labels}
 	logger.Log(context.Background(), core.Event{Tool: "snapshot", Extra: extra})
 	extra["nested"].([]any)[0] = "after"
+	numbers[0] = 2
+	labels["state"] = "after"
 
 	first := a.snapshot()[0]
 	second := b.snapshot()[0]
@@ -273,7 +277,13 @@ func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 		t.Fatalf("defaults not applied: %+v", first)
 	}
 	if got := first.Extra["nested"].([]any)[0]; got != "before" {
-		t.Fatalf("fanout snapshot mutated to %v", got)
+		t.Fatalf("fanout nested snapshot mutated to %v", got)
+	}
+	if got := first.Extra["numbers"].([]any)[0]; got != float64(1) {
+		t.Fatalf("fanout typed-slice snapshot mutated to %v", got)
+	}
+	if got := first.Extra["labels"].(map[string]any)["state"]; got != "before" {
+		t.Fatalf("fanout typed-map snapshot mutated to %v", got)
 	}
 }
 
