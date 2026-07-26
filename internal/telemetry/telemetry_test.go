@@ -188,25 +188,42 @@ func TestTee_FansOutToAllLoggers(t *testing.T) {
 	}
 }
 
+type countingMarshaler struct {
+	calls *int
+}
+
+func (m countingMarshaler) MarshalJSON() ([]byte, error) {
+	*m.calls = *m.calls + 1
+	return []byte(`{"state":"before"}`), nil
+}
+
 func TestTeeSnapshotsOnceBeforeFanout(t *testing.T) {
 	a := &fakeLogger{}
 	b := &fakeLogger{}
 	logger := Tee(a, b)
 	nested := []any{"before"}
+	marshalCalls := 0
 
-	logger.Log(context.Background(), core.Event{Tool: "snapshot", Extra: map[string]any{"nested": nested}})
+	logger.Log(context.Background(), core.Event{Tool: "snapshot", Extra: map[string]any{
+		"counted": countingMarshaler{calls: &marshalCalls},
+		"nested":  nested,
+	}})
 	nested[0] = "after"
 
 	first := a.snapshot()[0]
 	second := b.snapshot()[0]
+	if marshalCalls != 1 {
+		t.Fatalf("snapshot marshaling calls = %d, want 1", marshalCalls)
+	}
 	if first.Timestamp == "" || first.Timestamp != second.Timestamp {
 		t.Fatalf("fanout timestamps = %q and %q", first.Timestamp, second.Timestamp)
 	}
 	if got := first.Extra["nested"].([]any)[0]; got != "before" {
 		t.Fatalf("first sink snapshot = %v, want before", got)
 	}
+	first.Extra["nested"].([]any)[0] = "first-mutated"
 	if got := second.Extra["nested"].([]any)[0]; got != "before" {
-		t.Fatalf("second sink snapshot = %v, want before", got)
+		t.Fatalf("second sink snapshot = %v after first sink mutation, want before", got)
 	}
 }
 
