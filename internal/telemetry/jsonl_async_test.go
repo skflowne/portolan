@@ -3,6 +3,8 @@ package telemetry
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +20,7 @@ type controlledSink struct {
 
 	writeStarted chan struct{}
 	writeGate    chan struct{}
+	closeStarted chan struct{}
 	closeGate    chan struct{}
 	startOnce    sync.Once
 	closeOnce    sync.Once
@@ -57,6 +60,9 @@ func (s *controlledSink) Close() error {
 	s.mu.Lock()
 	s.closes++
 	s.mu.Unlock()
+	if s.closeStarted != nil {
+		s.closeOnce.Do(func() { close(s.closeStarted) })
+	}
 	if s.closeGate != nil {
 		<-s.closeGate
 	}
@@ -280,6 +286,44 @@ func TestJSONLOversizeRecordIsCappedAndCorrelated(t *testing.T) {
 	}
 }
 
+func TestJSONLPathologicalCorrelationUsesOriginalDigest(t *testing.T) {
+	sink := &controlledSink{}
+	logger := testJSONL(sink, func(opts *jsonlOptions) { opts.maxRecordBytes = 1024 })
+	original := string(bytes.Repeat([]byte("session-value-"), 2000))
+	logger.Log(context.Background(), core.Event{SessionID: original, GraphMode: "graph", Tool: "correlated", Generation: 7})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writes, _, _ := sink.snapshot()
+	var got core.Event
+	if err := json.Unmarshal(bytes.TrimSpace(writes[0]), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	digest := sha256.Sum256([]byte(original))
+	if !stringsContain(got.SessionID, hex.EncodeToString(digest[:])) {
+		t.Fatalf("capped session_id %q does not retain the original digest", got.SessionID)
+	}
+}
+
+func TestNewJSONLAcceptsProductionDiagnosticCallback(t *testing.T) {
+	called := make(chan struct{})
+	logger, err := NewJSONL(t.TempDir()+"/events.jsonl", func(error) {
+		select {
+		case <-called:
+		default:
+			close(called)
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewJSONL: %v", err)
+	}
+	logger.Log(context.Background(), core.Event{Tool: "oversize", Extra: map[string]any{"x": string(bytes.Repeat([]byte("x"), defaultMaxRecordBytes*2))}})
+	waitFor(t, called, "production diagnostic callback")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestJSONLMarshalFailureWritesCorrelatedFallback(t *testing.T) {
 	sink := &controlledSink{}
 	logger := testJSONL(sink, nil)
@@ -307,24 +351,65 @@ func TestJSONLWriteBehaviorAndPermanentFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls int
-			sink := &controlledSink{writeFn: func(p []byte) (int, error) {
-				calls++
-				return tc.fn(p)
-			}}
+			sink := &controlledSink{
+				writeStarted: make(chan struct{}),
+				writeGate:    make(chan struct{}),
+				writeFn: func(p []byte) (int, error) {
+					calls++
+					return tc.fn(p)
+				},
+			}
 			logger := testJSONL(sink, nil)
-			logEvent(logger, context.Background(), "failed")
-			logEvent(logger, context.Background(), "accepted-or-dropped")
+			firstDone := logEventAsync(logger, context.Background(), "failed")
+			waitFor(t, sink.writeStarted, "failing write")
+			requireReturned(t, firstDone, "first Log")
+			logEvent(logger, context.Background(), "accepted-before-failure")
+			close(sink.writeGate)
+			for !logger.failed.Load() {
+				time.Sleep(time.Millisecond)
+			}
+			logEvent(logger, context.Background(), "dropped-after-failure")
 			if err := logger.Close(); !errors.Is(err, root) {
 				t.Fatalf("Close error = %v, want root error", err)
 			}
 			stats := logger.Stats()
-			if stats.UndeliveredAccepted+stats.SinkFailureDrops < 2 {
-				t.Fatalf("failure accounting = %+v, want both records accounted", stats)
+			if stats.Accepted != 2 || stats.UndeliveredAccepted != 2 || stats.SinkFailureDrops != 1 {
+				t.Fatalf("failure accounting = %+v, want accepted=2 undelivered=2 sink_drops=1", stats)
 			}
 			if calls != 1 {
 				t.Fatalf("physical write calls = %d, want 1 after permanent failure", calls)
 			}
 		})
+	}
+}
+
+func TestJSONLWaitingAdmissionIsDroppedAfterSinkFailure(t *testing.T) {
+	root := errors.New("sink failed")
+	writeGate := make(chan struct{})
+	waitStarted := make(chan struct{})
+	var waitOnce sync.Once
+	sink := &controlledSink{
+		writeStarted: make(chan struct{}),
+		writeGate:    writeGate,
+		writeFn:      func([]byte) (int, error) { return 0, root },
+	}
+	logger := testJSONL(sink, func(opts *jsonlOptions) {
+		opts.capacity = 1
+		opts.admissionWait = func() { waitOnce.Do(func() { close(waitStarted) }) }
+	})
+	firstDone := logEventAsync(logger, context.Background(), "accepted")
+	waitFor(t, sink.writeStarted, "failing write")
+	requireReturned(t, firstDone, "accepted Log")
+	waitingDone := logEventAsync(logger, context.Background(), "waiting")
+	waitFor(t, waitStarted, "waiting admission")
+	close(writeGate)
+	requireReturned(t, waitingDone, "post-failure waiter")
+	if err := logger.Close(); !errors.Is(err, root) {
+		t.Fatalf("Close error = %v, want root failure", err)
+	}
+	stats := logger.Stats()
+	if stats.Accepted != 1 || stats.UndeliveredAccepted != 1 || stats.SinkFailureDrops != 1 {
+		t.Fatalf("failure waiter accounting = %+v", stats)
 	}
 }
 
@@ -425,6 +510,53 @@ func TestJSONLCloseTimeoutIsBoundedStableAndInterruptsSink(t *testing.T) {
 	close(sink.writeGate)
 }
 
+func TestJSONLCloseDeadlineIncludesStalledSinkClose(t *testing.T) {
+	sink := &controlledSink{closeStarted: make(chan struct{}), closeGate: make(chan struct{})}
+	logger := testJSONL(sink, func(opts *jsonlOptions) { opts.shutdownTimeout = 30 * time.Millisecond })
+	defer close(sink.closeGate)
+
+	done := make(chan error, 1)
+	go func() { done <- logger.Close() }()
+	waitFor(t, sink.closeStarted, "sink Close")
+	select {
+	case err := <-done:
+		if err == nil || !stringsContain(err.Error(), "timeout") {
+			t.Fatalf("Close error = %v, want timeout", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("logger Close hung on stalled sink Close")
+	}
+}
+
+func TestJSONLCloseInterruptsAdmissionWait(t *testing.T) {
+	writeGate := make(chan struct{})
+	waitStarted := make(chan struct{})
+	var waitOnce sync.Once
+	sink := &controlledSink{writeStarted: make(chan struct{}), writeGate: writeGate}
+	logger := testJSONL(sink, func(opts *jsonlOptions) {
+		opts.admissionTimeout = time.Second
+		opts.shutdownTimeout = 50 * time.Millisecond
+		opts.admissionWait = func() { waitOnce.Do(func() { close(waitStarted) }) }
+	})
+	defer close(writeGate)
+	firstDone := logEventAsync(logger, context.Background(), "first")
+	waitFor(t, sink.writeStarted, "first write")
+	requireReturned(t, firstDone, "first Log")
+	logEvent(logger, context.Background(), "second")
+	thirdDone := logEventAsync(logger, context.Background(), "waiting")
+	waitFor(t, waitStarted, "full-queue admission wait")
+
+	started := time.Now()
+	err := logger.Close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Close exceeded bound while admission waited: %s", elapsed)
+	}
+	if err == nil || !stringsContain(err.Error(), "timeout") {
+		t.Fatalf("Close error = %v, want bounded shutdown timeout", err)
+	}
+	requireReturned(t, thirdDone, "waiting Log")
+}
+
 func TestJSONLDiagnosticDispatcherIsBoundedAndObservable(t *testing.T) {
 	callbackStarted := make(chan struct{})
 	callbackGate := make(chan struct{})
@@ -456,6 +588,28 @@ func TestJSONLDiagnosticDispatcherIsBoundedAndObservable(t *testing.T) {
 		t.Fatalf("diagnostic stats = %+v", stats)
 	}
 	close(callbackGate)
+}
+
+func TestJSONLDiagnosticCallbackCanReenterStats(t *testing.T) {
+	sink := &controlledSink{}
+	called := make(chan struct{})
+	var logger *JSONLLogger
+	logger = testJSONL(sink, func(opts *jsonlOptions) {
+		opts.maxRecordBytes = 1024
+		opts.diagnostic = func(error) {
+			_ = logger.Stats()
+			select {
+			case <-called:
+			default:
+				close(called)
+			}
+		}
+	})
+	logger.Log(context.Background(), core.Event{Tool: "oversize", Extra: map[string]any{"x": string(bytes.Repeat([]byte("x"), 2048))}})
+	waitFor(t, called, "reentrant diagnostic")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 }
 
 func TestJSONLDiagnosticPanicIsRecoveredAndReported(t *testing.T) {

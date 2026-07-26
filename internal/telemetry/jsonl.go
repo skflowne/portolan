@@ -42,6 +42,7 @@ type jsonlOptions struct {
 	maxRecordBytes     int
 	diagnosticCapacity int
 	diagnostic         func(error)
+	admissionWait      func()
 }
 
 func defaultJSONLOptions() jsonlOptions {
@@ -100,8 +101,11 @@ type JSONLLogger struct {
 	opts jsonlOptions
 	diag *diagnosticDispatcher
 
-	queue chan jsonlRecord
-	slots chan struct{}
+	queue         chan jsonlRecord
+	slots         chan struct{}
+	admissionStop chan struct{}
+	failureStop   chan struct{}
+	failureOnce   sync.Once
 
 	admitMu     sync.RWMutex
 	closed      bool
@@ -127,8 +131,12 @@ type JSONLLogger struct {
 }
 
 // NewJSONL opens path for append. Parent directories are created as needed.
-func NewJSONL(path string) (*JSONLLogger, error) {
-	return newJSONL(path, defaultJSONLOptions())
+func NewJSONL(path string, diagnostic ...func(error)) (*JSONLLogger, error) {
+	opts := defaultJSONLOptions()
+	if len(diagnostic) > 0 {
+		opts.diagnostic = diagnostic[0]
+	}
+	return newJSONL(path, opts)
 }
 
 func newJSONL(path string, opts jsonlOptions) (*JSONLLogger, error) {
@@ -167,6 +175,8 @@ func newJSONLLogger(sink jsonlSink, opts jsonlOptions) *JSONLLogger {
 		diag:          newDiagnosticDispatcher(opts.diagnosticCapacity, opts.diagnostic),
 		queue:         make(chan jsonlRecord, opts.capacity),
 		slots:         make(chan struct{}, opts.capacity),
+		admissionStop: make(chan struct{}),
+		failureStop:   make(chan struct{}),
 		workerDone:    make(chan struct{}),
 		sinkCloseDone: make(chan struct{}),
 	}
@@ -214,6 +224,18 @@ func (l *JSONLLogger) Log(ctx context.Context, ev core.Event) {
 	if !l.trySlot(ctx) {
 		return
 	}
+	if l.closedState.Load() {
+		<-l.slots
+		l.counters.postCloseDrops.Add(1)
+		l.diag.report(fmt.Errorf("telemetry: admission stopped by close tool=%q", ev.Tool))
+		return
+	}
+	if l.failed.Load() {
+		<-l.slots
+		l.counters.sinkFailureDrops.Add(1)
+		l.diag.report(fmt.Errorf("telemetry: admission stopped by sink failure tool=%q", ev.Tool))
+		return
+	}
 	l.counters.accepted.Add(1)
 	l.counters.pending.Add(1)
 	l.queue <- jsonlRecord{line: line}
@@ -231,12 +253,23 @@ func (l *JSONLLogger) trySlot(ctx context.Context) bool {
 		l.diag.report(fmt.Errorf("telemetry: admission canceled: %w", err))
 		return false
 	}
+	if l.opts.admissionWait != nil {
+		l.opts.admissionWait()
+	}
 
 	timer := time.NewTimer(l.opts.admissionTimeout)
 	defer timer.Stop()
 	select {
 	case l.slots <- struct{}{}:
 		return true
+	case <-l.admissionStop:
+		l.counters.postCloseDrops.Add(1)
+		l.diag.report(fmt.Errorf("telemetry: admission stopped by close"))
+		return false
+	case <-l.failureStop:
+		l.counters.sinkFailureDrops.Add(1)
+		l.diag.report(fmt.Errorf("telemetry: admission stopped by sink failure"))
+		return false
 	case <-ctx.Done():
 		l.counters.canceledDrops.Add(1)
 		l.diag.report(fmt.Errorf("telemetry: admission canceled: %w", ctx.Err()))
@@ -313,6 +346,7 @@ func (l *JSONLLogger) finishWrite(writeErr error) {
 		}
 		l.errMu.Unlock()
 		l.failed.Store(true)
+		l.failureOnce.Do(func() { close(l.failureStop) })
 		l.counters.undeliveredAccepted.Add(1)
 		diagnostic = fmt.Errorf("telemetry: JSONL sink failed: %w", writeErr)
 	} else {
@@ -350,9 +384,10 @@ func (l *JSONLLogger) Close() error {
 
 func (l *JSONLLogger) closeBy(deadline time.Time) error {
 	l.closeOnce.Do(func() {
+		l.closedState.Store(true)
+		close(l.admissionStop)
 		l.admitMu.Lock()
 		l.closed = true
-		l.closedState.Store(true)
 		close(l.queue)
 		l.admitMu.Unlock()
 
@@ -400,8 +435,8 @@ func waitUntil(done <-chan struct{}, deadline time.Time) bool {
 
 func (l *JSONLLogger) closeSink() error {
 	l.sinkCloseOnce.Do(func() {
-		l.errMu.Lock()
 		err := l.sink.Close()
+		l.errMu.Lock()
 		if l.closeErr == nil && err != nil {
 			l.closeErr = fmt.Errorf("telemetry: JSONL close: %w", err)
 		}
@@ -481,9 +516,13 @@ func encodeJSONLRecord(ev core.Event, maxBytes int) (line []byte, oversize, fall
 		return encoded, true, fallback
 	}
 
+	originals := []string{ev.SessionID, ev.Tool, ev.GraphMode, ev.Timestamp, ev.Err}
+	limits := []int{len(ev.SessionID), len(ev.Tool), len(ev.GraphMode), len(ev.Timestamp), len(ev.Err)}
+
 	// Err is not a correlation field. Keep a recognizable prefix and a stable
 	// digest so repeated failures remain joinable without retaining unbounded text.
-	ev.Err = boundedString(ev.Err, maxBytes/4)
+	limits[4] = maxBytes / 4
+	ev.Err = boundedString(originals[4], limits[4])
 	encoded = marshalLine(ev)
 	if len(encoded) <= maxBytes {
 		return encoded, true, fallback
@@ -492,11 +531,13 @@ func encodeJSONLRecord(ev core.Event, maxBytes int) (line []byte, oversize, fall
 	// Pathological correlation strings cannot all remain byte-for-byte exact
 	// under a finite record cap. Retain prefixes plus hashes and diagnose the
 	// oversize transformation through the same counter/callback as above.
+	fields := []*string{&ev.SessionID, &ev.Tool, &ev.GraphMode, &ev.Timestamp, &ev.Err}
 	for len(encoded) > maxBytes {
 		changed := false
-		for _, field := range []*string{&ev.SessionID, &ev.Tool, &ev.GraphMode, &ev.Timestamp, &ev.Err} {
-			if len(*field) > 96 {
-				*field = boundedString(*field, max(96, len(*field)/2))
+		for i, field := range fields {
+			if limits[i] > 96 {
+				limits[i] = max(96, limits[i]/2)
+				*field = boundedString(originals[i], limits[i])
 				changed = true
 			}
 		}
@@ -511,11 +552,11 @@ func encodeJSONLRecord(ev core.Event, maxBytes int) (line []byte, oversize, fall
 
 	// minimumRecordBytes guarantees this final valid Event fits.
 	ev.Extra = nil
-	ev.Timestamp = boundedString(ev.Timestamp, 80)
-	ev.SessionID = boundedString(ev.SessionID, 80)
-	ev.GraphMode = boundedString(ev.GraphMode, 80)
-	ev.Tool = boundedString(ev.Tool, 80)
-	ev.Err = boundedString(ev.Err, 80)
+	ev.SessionID = boundedString(originals[0], 80)
+	ev.Tool = boundedString(originals[1], 80)
+	ev.GraphMode = boundedString(originals[2], 80)
+	ev.Timestamp = boundedString(originals[3], 80)
+	ev.Err = boundedString(originals[4], 80)
 	return marshalLine(ev), true, fallback
 }
 
