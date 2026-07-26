@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -89,7 +90,9 @@ func stopTelemetryDaemon(t *testing.T, d *testinfra.Daemon, sess *mcp.ClientSess
 	} else if err != nil {
 		t.Fatalf("daemon exit: %v (stderr=%s)", err, d.Stderr())
 	}
-	_, _ = io.ReadAll(d.Stdout)
+	if !d.FinishStdout(time.Second) {
+		t.Fatal("daemon stdout capture did not reach EOF")
+	}
 }
 
 func assertProtocolOnlyStdout(t *testing.T, raw []byte) {
@@ -117,12 +120,10 @@ func readExactTelemetryEvent(t *testing.T, path string) map[string]any {
 	return lines[0]
 }
 
-func spanAttributes(attributes []*commonpb.KeyValue) map[string]string {
-	out := make(map[string]string, len(attributes))
+func spanAttributes(attributes []*commonpb.KeyValue) map[string]*commonpb.AnyValue {
+	out := make(map[string]*commonpb.AnyValue, len(attributes))
 	for _, attr := range attributes {
-		if attr.Value != nil {
-			out[attr.Key] = attr.Value.GetStringValue()
-		}
+		out[attr.Key] = attr.Value
 	}
 	return out
 }
@@ -140,22 +141,64 @@ func TestDaemonOTLPHTTPPreservesJSONLAndMCPStdout(t *testing.T) {
 	select {
 	case request := <-receiver.requests:
 		var spans int
-		var attrs map[string]string
+		var spanName string
+		var attrs map[string]*commonpb.AnyValue
 		for _, resource := range request.ResourceSpans {
 			for _, scope := range resource.ScopeSpans {
 				for _, span := range scope.Spans {
 					spans++
+					spanName = span.Name
 					attrs = spanAttributes(span.Attributes)
 				}
 			}
 		}
-		if spans != 1 || attrs["tool"] != event["tool"] || attrs["session_id"] != event["session_id"] || attrs["graph_mode"] != event["graph_mode"] || attrs["ts"] != event["ts"] {
-			t.Fatalf("OTLP span does not match JSONL event: spans=%d attrs=%v event=%v", spans, attrs, event)
+		if spans != 1 || spanName != event["tool"] || attrs["tool"].GetStringValue() != event["tool"] || attrs["session_id"].GetStringValue() != event["session_id"] || attrs["graph_mode"].GetStringValue() != event["graph_mode"] || attrs["ts"].GetStringValue() != event["ts"] {
+			t.Fatalf("OTLP span identity does not match JSONL event: spans=%d name=%q attrs=%v event=%v", spans, spanName, attrs, event)
+		}
+		for key, eventKey := range map[string]string{"duration_ms": "duration_ms", "result_size": "result_size", "generation": "generation"} {
+			if got, want := attrs[key].GetIntValue(), int64(event[eventKey].(float64)); got != want {
+				t.Errorf("OTLP %s = %d, JSONL = %d", key, got, want)
+			}
+		}
+		for key, eventKey := range map[string]string{"truncated": "truncated", "stale": "stale"} {
+			if got, want := attrs[key].GetBoolValue(), event[eventKey].(bool); got != want {
+				t.Errorf("OTLP %s = %t, JSONL = %t", key, got, want)
+			}
+		}
+		if _, ok := attrs["err"]; ok {
+			t.Errorf("OTLP unexpectedly contains err attribute: %v", attrs["err"])
+		}
+		for key := range attrs {
+			if strings.HasPrefix(key, "extra.") {
+				t.Errorf("OTLP unexpectedly contains extra attribute %q", key)
+			}
 		}
 	case <-time.After(time.Second):
 		t.Fatal("fake OTLP collector received no span")
 	}
 	assertProtocolOnlyStdout(t, d.StdoutBytes())
+}
+
+func TestDaemonUnreachableOTLPDoesNotObstructToolOrJSONL(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving unreachable collector address: %v", err)
+	}
+	endpoint := "http://" + listener.Addr().String() + "/v1/traces"
+	_ = listener.Close()
+
+	d, sess, jsonl := startTelemetryDaemon(t, endpoint)
+	started := time.Now()
+	callOneTelemetryTool(t, sess)
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("tool response took %s with unreachable OTLP", elapsed)
+	}
+	stopTelemetryDaemon(t, d, sess)
+	readExactTelemetryEvent(t, jsonl)
+	assertProtocolOnlyStdout(t, d.StdoutBytes())
+	if !strings.Contains(d.Stderr(), "telemetry") {
+		t.Fatalf("unreachable OTLP failure was not diagnosed: %s", d.Stderr())
+	}
 }
 
 func TestDaemonStalledOTLPShutdownIsBoundedAndJSONLComplete(t *testing.T) {
@@ -192,7 +235,9 @@ func TestDaemonStalledOTLPShutdownIsBoundedAndJSONLComplete(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 3*time.Second {
 		t.Fatalf("daemon OTLP shutdown took %s", elapsed)
 	}
-	_, _ = io.ReadAll(d.Stdout)
+	if !d.FinishStdout(time.Second) {
+		t.Fatal("stalled-collector stdout capture did not reach EOF")
+	}
 	readExactTelemetryEvent(t, jsonl)
 	assertProtocolOnlyStdout(t, d.StdoutBytes())
 	if strings.Contains(d.StdoutString(), "traceId") {

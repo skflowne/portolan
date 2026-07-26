@@ -155,6 +155,20 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 			t.Errorf("attribute %s = %q, want %q", key, got, want)
 		}
 	}
+	for key, want := range map[string]int64{
+		"duration_ms": int64(ev.DurationMs),
+		"result_size": int64(ev.ResultSize),
+		"generation":  int64(ev.Generation),
+	} {
+		if got := attrs[key].AsInt64(); got != want {
+			t.Errorf("attribute %s = %d, want %d", key, got, want)
+		}
+	}
+	for key, want := range map[string]bool{"truncated": ev.Truncated, "stale": ev.Stale} {
+		if got := attrs[key].AsBool(); got != want {
+			t.Errorf("attribute %s = %t, want %t", key, got, want)
+		}
+	}
 	if stats := logger.Stats(); stats.Accepted != 1 || stats.Exported != 1 || stats.Pending != 0 {
 		t.Fatalf("OTEL stats = %+v", stats)
 	}
@@ -264,27 +278,46 @@ func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 }
 
 type gatedCloseLogger struct {
-	started chan struct{}
-	gate    chan struct{}
-	once    sync.Once
+	started  chan struct{}
+	deadline chan time.Time
+	gate     chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	calls    int
 }
 
 func (l *gatedCloseLogger) Log(context.Context, core.Event) {}
 func (l *gatedCloseLogger) Close() error {
+	return errors.New("direct Close called instead of shared-deadline close")
+}
+func (l *gatedCloseLogger) closeBy(deadline time.Time) error {
+	l.mu.Lock()
+	l.calls++
+	l.mu.Unlock()
+	l.deadline <- deadline
 	l.once.Do(func() { close(l.started) })
 	<-l.gate
 	return nil
 }
+func (l *gatedCloseLogger) closeCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.calls
+}
 
 func TestTeeClosesSinksConcurrently(t *testing.T) {
 	gate := make(chan struct{})
-	a := &gatedCloseLogger{started: make(chan struct{}), gate: gate}
-	b := &gatedCloseLogger{started: make(chan struct{}), gate: gate}
+	a := &gatedCloseLogger{started: make(chan struct{}), deadline: make(chan time.Time, 1), gate: gate}
+	b := &gatedCloseLogger{started: make(chan struct{}), deadline: make(chan time.Time, 1), gate: gate}
 	tee := Tee(a, b)
 	done := make(chan error, 1)
 	go func() { done <- tee.Close() }()
 	waitFor(t, a.started, "first sink close")
 	waitFor(t, b.started, "second sink close")
+	firstDeadline, secondDeadline := <-a.deadline, <-b.deadline
+	if !firstDeadline.Equal(secondDeadline) {
+		t.Fatalf("sink deadlines differ: %s != %s", firstDeadline, secondDeadline)
+	}
 	close(gate)
 	select {
 	case err := <-done:
@@ -293,5 +326,11 @@ func TestTeeClosesSinksConcurrently(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Tee.Close did not finish")
+	}
+	if err := tee.Close(); err != nil {
+		t.Fatalf("repeated Tee.Close: %v", err)
+	}
+	if a.closeCalls() != 1 || b.closeCalls() != 1 {
+		t.Fatalf("repeated composite close invoked sinks again: a=%d b=%d", a.closeCalls(), b.closeCalls())
 	}
 }
