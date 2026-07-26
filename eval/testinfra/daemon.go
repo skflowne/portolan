@@ -4,6 +4,7 @@ package testinfra
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -162,6 +165,20 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	}()
 	t.Cleanup(func() { d.Cleanup(t) })
 	return d
+}
+
+// ConnectMCP initializes an MCP client session over the daemon's stdio pipes.
+func ConnectMCP(t *testing.T, d *Daemon, name string) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: name, Version: "0.0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.IOTransport{Reader: d.Stdout, Writer: d.Stdin}, nil)
+	if err != nil {
+		t.Fatalf("connecting to daemon: %v (stderr=%s)", err, d.Stderr())
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	return sess
 }
 
 // RequireSupport skips daemon evals on platforms where the Unix control socket is unavailable.
