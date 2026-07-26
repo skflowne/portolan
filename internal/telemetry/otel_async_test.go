@@ -115,6 +115,15 @@ func attributesByName(attributes []attribute.KeyValue) map[string]attribute.Valu
 	return out
 }
 
+func requireAttribute(t *testing.T, attributes map[string]attribute.Value, key string) attribute.Value {
+	t.Helper()
+	value, ok := attributes[key]
+	if !ok {
+		t.Fatalf("missing attribute %q", key)
+	}
+	return value
+}
+
 func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 	exporter := &capturingExporter{}
 	logger := testOTEL(t, exporter, nil)
@@ -151,7 +160,7 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 		"err":        ev.Err,
 		"extra.key":  "value",
 	} {
-		if got := attrs[key].AsString(); got != want {
+		if got := requireAttribute(t, attrs, key).AsString(); got != want {
 			t.Errorf("attribute %s = %q, want %q", key, got, want)
 		}
 	}
@@ -160,12 +169,12 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 		"result_size": int64(ev.ResultSize),
 		"generation":  int64(ev.Generation),
 	} {
-		if got := attrs[key].AsInt64(); got != want {
+		if got := requireAttribute(t, attrs, key).AsInt64(); got != want {
 			t.Errorf("attribute %s = %d, want %d", key, got, want)
 		}
 	}
 	for key, want := range map[string]bool{"truncated": ev.Truncated, "stale": ev.Stale} {
-		if got := attrs[key].AsBool(); got != want {
+		if got := requireAttribute(t, attrs, key).AsBool(); got != want {
 			t.Errorf("attribute %s = %t, want %t", key, got, want)
 		}
 	}
@@ -189,7 +198,7 @@ func TestOTELLoggerDefaultsEmptyToolIdentity(t *testing.T) {
 	if got := spans[0].Name; got != "unknown_tool" {
 		t.Fatalf("span name = %q, want unknown_tool", got)
 	}
-	if got := attributesByName(spans[0].Attributes)["tool"].AsString(); got != "unknown_tool" {
+	if got := requireAttribute(t, attributesByName(spans[0].Attributes), "tool").AsString(); got != "unknown_tool" {
 		t.Fatalf("tool attribute = %q, want unknown_tool", got)
 	}
 }
@@ -291,7 +300,7 @@ func TestOTELSnapshotFailureUsesStableSinkOwnedRepresentation(t *testing.T) {
 	}
 	attrs := attributesByName(spans[0].Attributes)
 	const want = "snapshot_error: json: unsupported type: func()"
-	if got := attrs["extra.bad"].AsString(); got != want {
+	if got := requireAttribute(t, attrs, "extra.bad").AsString(); got != want {
 		t.Fatalf("OTEL unsupported value = %q, want %q", got, want)
 	}
 	if stats := otel.Stats(); stats.Accepted != 1 || stats.Exported != 1 {

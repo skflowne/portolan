@@ -128,6 +128,15 @@ func spanAttributes(attributes []*commonpb.KeyValue) map[string]*commonpb.AnyVal
 	return out
 }
 
+func requireSpanAttribute(t *testing.T, attributes map[string]*commonpb.AnyValue, key string) *commonpb.AnyValue {
+	t.Helper()
+	value, ok := attributes[key]
+	if !ok || value == nil {
+		t.Fatalf("missing OTLP span attribute %q", key)
+	}
+	return value
+}
+
 func TestDaemonOTLPHTTPPreservesJSONLAndMCPStdout(t *testing.T) {
 	receiver := newOTLPReceiver(t)
 	d, sess, jsonl := startTelemetryDaemon(t, receiver.server.URL+"/v1/traces")
@@ -152,16 +161,16 @@ func TestDaemonOTLPHTTPPreservesJSONLAndMCPStdout(t *testing.T) {
 				}
 			}
 		}
-		if spans != 1 || spanName != event["tool"] || attrs["tool"].GetStringValue() != event["tool"] || attrs["session_id"].GetStringValue() != event["session_id"] || attrs["graph_mode"].GetStringValue() != event["graph_mode"] || attrs["ts"].GetStringValue() != event["ts"] {
+		if spans != 1 || spanName != event["tool"] || requireSpanAttribute(t, attrs, "tool").GetStringValue() != event["tool"] || requireSpanAttribute(t, attrs, "session_id").GetStringValue() != event["session_id"] || requireSpanAttribute(t, attrs, "graph_mode").GetStringValue() != event["graph_mode"] || requireSpanAttribute(t, attrs, "ts").GetStringValue() != event["ts"] {
 			t.Fatalf("OTLP span identity does not match JSONL event: spans=%d name=%q attrs=%v event=%v", spans, spanName, attrs, event)
 		}
 		for key, eventKey := range map[string]string{"duration_ms": "duration_ms", "result_size": "result_size", "generation": "generation"} {
-			if got, want := attrs[key].GetIntValue(), int64(event[eventKey].(float64)); got != want {
+			if got, want := requireSpanAttribute(t, attrs, key).GetIntValue(), int64(event[eventKey].(float64)); got != want {
 				t.Errorf("OTLP %s = %d, JSONL = %d", key, got, want)
 			}
 		}
 		for key, eventKey := range map[string]string{"truncated": "truncated", "stale": "stale"} {
-			if got, want := attrs[key].GetBoolValue(), event[eventKey].(bool); got != want {
+			if got, want := requireSpanAttribute(t, attrs, key).GetBoolValue(), event[eventKey].(bool); got != want {
 				t.Errorf("OTLP %s = %t, JSONL = %t", key, got, want)
 			}
 		}
