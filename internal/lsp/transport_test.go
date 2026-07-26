@@ -61,7 +61,16 @@ func TestPendingResponseTargetSurvivesConcurrentShutdown(t *testing.T) {
 		p.shutdownPending(cause)
 	}()
 	close(start)
-	wg.Wait()
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("response delivery and shutdown did not finish")
+	}
 
 	result := waitPendingResult(t, request)
 	if delivered {
@@ -232,11 +241,11 @@ func TestCloseReleasesPendingAndSerializesShutdown(t *testing.T) {
 		t.Fatal("shutdown response did not complete internal request")
 	}
 
-	if err := <-notifyErr; !errors.Is(err, errProviderClosed) {
+	if err := waitError(t, notifyErr, "queued notification"); !errors.Is(err, errProviderClosed) {
 		t.Fatalf("queued notification error = %v, want provider closed", err)
 	}
 	for range closers {
-		if err := <-closeErrs; err != nil {
+		if err := waitError(t, closeErrs, "Close"); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	}
@@ -276,6 +285,17 @@ func waitCallResult(t *testing.T, results <-chan pendingResult) pendingResult {
 	case <-time.After(time.Second):
 		t.Fatal("call did not complete")
 		return pendingResult{}
+	}
+}
+
+func waitError(t *testing.T, results <-chan error, operation string) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not complete", operation)
+		return nil
 	}
 }
 

@@ -130,7 +130,7 @@ func (p *Provider) notify(method string, params any) error {
 }
 
 // readLoop is the single background reader: it demuxes incoming frames by
-// JSON-RPC id into the pending map's per-request channels. It runs for the
+// JSON-RPC id into per-request lifecycle entries. It runs for the
 // lifetime of the subprocess and exits (marking the provider closed) on any
 // read/decode error, most commonly EOF when the process exits.
 func (p *Provider) readLoop() {
