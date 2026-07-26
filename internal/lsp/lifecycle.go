@@ -73,7 +73,7 @@ func (t *transport) close() error {
 		_, _ = t.writeMessage(ctx, writeExit, rpcNotification{JSONRPC: "2.0", Method: "exit", Params: nil})
 	}
 
-	_ = t.closeInput()
+	_ = t.closeInputAfterWrites(totalCtx)
 	t.waitForProcessContext(totalCtx, exitWait, killWait)
 	t.finishClose()
 	return nil
