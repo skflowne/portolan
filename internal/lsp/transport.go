@@ -55,6 +55,9 @@ func newWriteGate() chan struct{} {
 }
 
 func (p *Provider) lockWrite(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case p.writeGate <- struct{}{}:
 		return nil
@@ -76,7 +79,8 @@ func marshalMessage(v any) ([]byte, error) {
 }
 
 // writeMessage admits and writes an external request or notification while
-// holding writeMu, so Close cannot place shutdown ahead of an admitted frame.
+// holding the write gate, so Close cannot place shutdown ahead of an admitted
+// frame.
 func (p *Provider) writeMessage(v any) error {
 	data, err := marshalMessage(v)
 	if err != nil {

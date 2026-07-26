@@ -55,7 +55,7 @@ type Provider struct {
 
 	openMu    sync.Mutex
 	openFiles map[string]bool
-	readFile  func(string) ([]byte, error)
+	readFile  func(context.Context, string) ([]byte, error)
 
 	stderrBuf *stderrBuffer
 	timeout   time.Duration
@@ -101,8 +101,10 @@ func New(cfg core.Config) (*Provider, error) {
 		openFiles: make(map[string]bool),
 		stderrBuf: newStderrBuffer(),
 		writeGate: newWriteGate(),
-		readFile:  os.ReadFile,
-		timeout:   defaultRequestTimeout,
+		readFile: func(_ context.Context, path string) ([]byte, error) {
+			return os.ReadFile(path)
+		},
+		timeout: defaultRequestTimeout,
 	}
 
 	go p.stderrBuf.drain(stderr)
@@ -177,7 +179,7 @@ func (p *Provider) ensureOpen(absFile string) error {
 		return nil
 	}
 
-	data, err := p.readFile(absFile)
+	data, err := p.readFile(context.Background(), absFile)
 	if err != nil {
 		return fmt.Errorf("lsp: reading %s: %w", absFile, err)
 	}
