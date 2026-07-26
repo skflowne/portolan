@@ -4,6 +4,9 @@
 **Orchestration:** foundation built serially (contracts), then a 4-agent parallel wave against
 those contracts, then a serial integration wave.
 
+**Historical note:** this records the original Phase 0 decomposition. The telemetry implementation
+has since been hardened to bounded JSONL plus opt-in OTLP/HTTP; see `ARCHITECTURE.md` and `PLAN.md`.
+
 ## Why this decomposition
 Phases in `PLAN.md` are strictly sequential. **Within Phase 0**, the components parallelize once
 the shared contracts in `internal/core` are frozen. The four wave-1 packages touch **disjoint
@@ -13,7 +16,7 @@ and runs the end-to-end + Tier A gates.
 
 ## Foundation (DONE — serial, built by orchestrator)
 - `go.mod` (module `github.com/skflowne/portolan`, Go 1.26) with **deps pre-added**:
-  `github.com/modelcontextprotocol/go-sdk` v1.6.1, `go.opentelemetry.io/otel` + sdk + stdouttrace v1.44.0.
+  `github.com/modelcontextprotocol/go-sdk` v1.6.1 and the OpenTelemetry API/SDK v1.44.0.
   **Agents must NOT run `go get` / `go mod tidy`** — deps are present; report any missing dep instead.
 - `internal/core`: `types.go` (Position/Range/Location/Symbol/Freshness + `LanguageProvider`),
   `telemetry.go` (`Event` + `Logger` + `NopLogger`), `config.go` (`Config` + `GenerationCounter`),
@@ -41,4 +44,5 @@ returns honest nulls (nil,nil) not errors on found-nothing, never panics on a de
 5. Verify Phase 0 **exit criteria**: MCP round-trip works; every call logged; Tier A green.
 
 ## Exit criteria (from PLAN.md Phase 0)
-MCP round-trip works · every call logged (JSONL + OTEL) · Tier A green on a pinned repo.
+MCP round-trip works · every call logged to authoritative JSONL (and mirrored to OTLP when
+configured) · Tier A green on a pinned repo.
