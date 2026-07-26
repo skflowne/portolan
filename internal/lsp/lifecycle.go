@@ -101,11 +101,7 @@ func (l *transportLifecycle) beginClose(key string) (*pendingRequest, bool) {
 	l.state = providerClosing
 	l.connErr = errProviderClosed
 
-	waiting := make([]*pendingRequest, 0, len(l.pending))
-	for id, request := range l.pending {
-		waiting = append(waiting, request)
-		delete(l.pending, id)
-	}
+	waiting := l.drainPendingLocked()
 	shutdown := newPendingRequest()
 	l.pending[key] = shutdown
 	l.mu.Unlock()
@@ -130,16 +126,21 @@ func (l *transportLifecycle) shutdown(cause error) {
 		l.connErr = cause
 	}
 	l.state = providerClosed
-	waiting := make([]*pendingRequest, 0, len(l.pending))
-	for id, request := range l.pending {
-		waiting = append(waiting, request)
-		delete(l.pending, id)
-	}
+	waiting := l.drainPendingLocked()
 	l.mu.Unlock()
 
 	for _, request := range waiting {
 		request.complete(pendingResult{err: cause})
 	}
+}
+
+func (l *transportLifecycle) drainPendingLocked() []*pendingRequest {
+	waiting := make([]*pendingRequest, 0, len(l.pending))
+	for id, request := range l.pending {
+		waiting = append(waiting, request)
+		delete(l.pending, id)
+	}
+	return waiting
 }
 
 func (l *transportLifecycle) connectionErrorLocked() error {
