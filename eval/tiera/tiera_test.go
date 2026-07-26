@@ -31,11 +31,8 @@ func TestMain(m *testing.M) {
 }
 
 type daemonProcess struct {
-	proc   *testinfra.Daemon
-	sess   *mcp.ClientSession
-	jsonl  string
-	socket string
-	pid    int
+	sess  *mcp.ClientSession
+	jsonl string
 }
 
 func startDaemon(t *testing.T, sessionID, socket string) *daemonProcess {
@@ -49,28 +46,9 @@ func startDaemon(t *testing.T, sessionID, socket string) *daemonProcess {
 		SessionID:     sessionID,
 		ControlSocket: socket,
 	})
-	client := mcp.NewClient(&mcp.Implementation{Name: sessionID, Version: "0.0.1"}, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.IOTransport{Reader: proc.Stdout, Writer: proc.Stdin}, nil)
-	if err != nil {
-		t.Fatalf("connecting to daemon: %v (stderr=%s)", err, proc.Stderr())
-	}
-	d := &daemonProcess{proc: proc, sess: sess, jsonl: jsonl, socket: socket, pid: proc.WaitForPID(t)}
-	t.Cleanup(func() { _ = sess.Close() })
-	return d
-}
-
-func startLifecycleDaemon(t *testing.T) *daemonProcess {
-	t.Helper()
-	return startDaemon(t, "lifecycle", filepath.Join(t.TempDir(), "control.sock"))
-}
-
-func waitForCommand(t *testing.T, d *daemonProcess) {
-	t.Helper()
-	if _, ok := d.proc.WaitForExit(testinfra.ShortWait); !ok {
-		t.Fatal("daemon did not exit promptly")
-	}
+	sess := testinfra.ConnectMCP(t, proc, sessionID)
+	proc.WaitForPID(t)
+	return &daemonProcess{sess: sess, jsonl: jsonl}
 }
 
 func session(t *testing.T) (*mcp.ClientSession, string) {
@@ -234,69 +212,6 @@ func TestTierA(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestDaemonStdinEOFStopsProvider(t *testing.T) {
-	d := startLifecycleDaemon(t)
-	started := time.Now()
-	if err := d.sess.Close(); err != nil {
-		t.Fatalf("closing MCP stdin: %v", err)
-	}
-	waitForCommand(t, d)
-	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
-		t.Fatalf("MCP disconnect took too long: %v", elapsed)
-	}
-	testinfra.AssertPIDGone(t, d.pid)
-}
-
-func TestDaemonSIGTERMStopsWithIdleControlClient(t *testing.T) {
-	d := startLifecycleDaemon(t)
-	conn := testinfra.AcceptedIdleConnection(t, d.socket)
-	defer conn.Close()
-
-	started := time.Now()
-	if err := testinfra.Terminate(d.proc.Cmd.Process); err != nil {
-		t.Fatalf("SIGTERM: %v", err)
-	}
-	waitForCommand(t, d)
-	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
-		t.Fatalf("SIGTERM shutdown took too long: %v", elapsed)
-	}
-	testinfra.AssertConnectionClosed(t, conn)
-	testinfra.AssertPIDGone(t, d.pid)
-	_ = d.sess.Close()
-}
-
-func TestDuplicateDaemonLeavesOriginalFunctional(t *testing.T) {
-	first := startLifecycleDaemon(t)
-	secondProc := testinfra.NewDaemon(t, testinfra.Config{
-		Binary:        daemonBin,
-		ProjectRoot:   testinfra.FixtureRoot(),
-		SessionID:     "duplicate",
-		ControlSocket: first.socket,
-	})
-	secondPID := secondProc.WaitForPID(t)
-	secondClient := mcp.NewClient(&mcp.Implementation{Name: "duplicate", Version: "0.0.1"}, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	_, err := secondClient.Connect(ctx, &mcp.IOTransport{Reader: secondProc.Stdout, Writer: secondProc.Stdin}, nil)
-	cancel()
-	if err == nil {
-		t.Fatal("duplicate daemon unexpectedly connected")
-	}
-	if waitErr, ok := secondProc.WaitForExit(testinfra.ShortWait); !ok || waitErr == nil {
-		t.Fatalf("duplicate daemon exit: err=%v exited=%v", waitErr, ok)
-	}
-	if !strings.Contains(secondProc.Stderr(), "already owned") {
-		t.Fatalf("duplicate startup error was not clear: %s", secondProc.Stderr())
-	}
-	testinfra.AssertPIDGone(t, secondPID)
-
-	listCtx, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer listCancel()
-	result, err := first.sess.ListTools(listCtx, nil)
-	if err != nil || len(result.Tools) != 3 {
-		t.Fatalf("original daemon was disrupted: tools=%d err=%v", len(result.Tools), err)
-	}
 }
 
 func assertFresh(t *testing.T, stale bool) {

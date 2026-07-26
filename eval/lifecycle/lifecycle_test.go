@@ -5,6 +5,7 @@ package lifecycle
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skflowne/portolan/eval/testinfra"
 )
 
@@ -47,6 +49,12 @@ func startDaemon(t *testing.T, socket string) (*testinfra.Daemon, int) {
 		t.Fatalf("waiting for daemon readiness: %v (stderr=%s)", err, d.Stderr())
 	}
 	return d, d.WaitForPID(t)
+}
+
+func startConnectedDaemon(t *testing.T, socket string) (*testinfra.Daemon, *mcp.ClientSession, int) {
+	t.Helper()
+	d, childPID := startDaemon(t, socket)
+	return d, testinfra.ConnectMCP(t, d, "lifecycle"), childPID
 }
 
 func assertPathGone(t *testing.T, path string) {
@@ -84,21 +92,30 @@ func commandOnConn(t *testing.T, conn net.Conn, command string) string {
 
 func shutdownViaStdin(t *testing.T, d *testinfra.Daemon) {
 	t.Helper()
+	started := time.Now()
 	if err := d.Stdin.Close(); err != nil {
 		t.Fatalf("closing daemon stdin: %v", err)
 	}
+	requireSuccessfulExit(t, d, "stdin disconnect", started)
+}
+
+func requireSuccessfulExit(t *testing.T, d *testinfra.Daemon, trigger string, started time.Time) {
+	t.Helper()
 	err, ok := d.WaitForExit(testinfra.ShortWait)
 	if !ok {
-		t.Fatalf("daemon did not exit after stdin disconnect")
+		t.Fatalf("daemon did not exit after %s", trigger)
 	}
 	if err != nil {
-		t.Fatalf("daemon exited unsuccessfully after stdin disconnect: %v (stderr=%s)", err, d.Stderr())
+		t.Fatalf("daemon exited unsuccessfully after %s: %v (stderr=%s)", trigger, err, d.Stderr())
+	}
+	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
+		t.Fatalf("%s shutdown took too long: %v", trigger, elapsed)
 	}
 }
 
 func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "control.sock")
-	d, childPID := startDaemon(t, socket)
+	d, sess, childPID := startConnectedDaemon(t, socket)
 	if got := controlCommand(t, socket, "sync file.ts"); got != "ok generation=1\n" {
 		t.Fatalf("sync response = %q", got)
 	}
@@ -108,7 +125,11 @@ func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
 	idle := testinfra.AcceptedIdleConnection(t, socket)
 	defer idle.Close()
 
-	shutdownViaStdin(t, d)
+	started := time.Now()
+	if err := sess.Close(); err != nil {
+		t.Fatalf("closing MCP stdin: %v", err)
+	}
+	requireSuccessfulExit(t, d, "MCP disconnect", started)
 	testinfra.AssertPIDGone(t, childPID)
 	assertPathGone(t, socket)
 	testinfra.AssertConnectionClosed(t, idle)
@@ -116,20 +137,15 @@ func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
 
 func TestSIGTERMWithIdleControlClient(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "control.sock")
-	d, childPID := startDaemon(t, socket)
+	d, _, childPID := startConnectedDaemon(t, socket)
 	idle := testinfra.AcceptedIdleConnection(t, socket)
 	defer idle.Close()
 
+	started := time.Now()
 	if err := testinfra.Terminate(d.Cmd.Process); err != nil {
 		t.Fatalf("sending SIGTERM: %v", err)
 	}
-	err, ok := d.WaitForExit(testinfra.ShortWait)
-	if !ok {
-		t.Fatalf("daemon did not exit after SIGTERM")
-	}
-	if err != nil {
-		t.Fatalf("daemon exited unsuccessfully after SIGTERM: %v (stderr=%s)", err, d.Stderr())
-	}
+	requireSuccessfulExit(t, d, "SIGTERM", started)
 	testinfra.AssertConnectionClosed(t, idle)
 	testinfra.AssertPIDGone(t, childPID)
 	assertPathGone(t, socket)
@@ -137,7 +153,7 @@ func TestSIGTERMWithIdleControlClient(t *testing.T) {
 
 func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "control.sock")
-	first, _ := startDaemon(t, socket)
+	first, firstSession, _ := startConnectedDaemon(t, socket)
 	originalInfo, err := os.Lstat(socket)
 	if err != nil {
 		t.Fatalf("stat original socket: %v", err)
@@ -145,6 +161,13 @@ func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
 
 	second := newDaemon(t, socket)
 	secondPID := second.WaitForPID(t)
+	secondClient := mcp.NewClient(&mcp.Implementation{Name: "duplicate", Version: "0.0.1"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	_, connectErr := secondClient.Connect(ctx, &mcp.IOTransport{Reader: second.Stdout, Writer: second.Stdin}, nil)
+	cancel()
+	if connectErr == nil {
+		t.Fatal("duplicate daemon unexpectedly connected")
+	}
 	exitErr, ok := second.WaitForExit(testinfra.ShortWait)
 	if !ok {
 		t.Fatalf("duplicate daemon did not exit promptly")
@@ -153,7 +176,7 @@ func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
 		t.Fatalf("duplicate daemon exited successfully")
 	}
 	stderr := second.Stderr()
-	if !strings.Contains(stderr, socket) || !strings.Contains(stderr, "already") {
+	if !strings.Contains(stderr, socket) || !strings.Contains(stderr, "already owned") {
 		t.Fatalf("duplicate startup error did not identify socket ownership: %s", stderr)
 	}
 	testinfra.AssertPIDGone(t, secondPID)
@@ -170,6 +193,16 @@ func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
 	}
 	if _, ok := first.WaitForExit(50 * time.Millisecond); ok {
 		t.Fatalf("original daemon exited while duplicate started: %v", first.ExitError())
+	}
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	result, listErr := firstSession.ListTools(listCtx, nil)
+	listCancel()
+	if listErr != nil {
+		t.Fatalf("original daemon was disrupted: %v", listErr)
+	}
+	if len(result.Tools) != 3 {
+		t.Fatalf("original daemon was disrupted: tools=%d", len(result.Tools))
 	}
 	shutdownViaStdin(t, first)
 	assertPathGone(t, socket)
