@@ -28,11 +28,51 @@ func TestExtraSnapshotDetachesSupportedNestedValues(t *testing.T) {
 	if got := values["nested"].([]any)[0]; got != "before" {
 		t.Fatalf("nested snapshot = %v, want before", got)
 	}
-	if got := values["numbers"].([]any)[0]; got != float64(1) {
-		t.Fatalf("typed slice snapshot = %v, want 1", got)
+	if got := marshalJSON(t, values["numbers"].([]any)[0]); got != "1" {
+		t.Fatalf("typed slice snapshot = %s, want 1", got)
 	}
 	if got := values["labels"].(map[string]any)["state"]; got != "before" {
 		t.Fatalf("typed map snapshot = %v, want before", got)
+	}
+}
+
+func TestExtraSnapshotPreservesIntegerJSONRepresentation(t *testing.T) {
+	signed := map[string]int64{"min": -9223372036854775808}
+	unsigned := []uint64{18446744073709551615}
+	extra := map[string]any{"signed": signed, "unsigned": unsigned}
+	const want = `{"signed":{"min":-9223372036854775808},"unsigned":[18446744073709551615]}`
+
+	snapshot := snapshotExtra(extra)
+	signed["min"] = 0
+	unsigned[0] = 0
+	if got := marshalJSON(t, snapshot.values()); got != want {
+		t.Fatalf("snapshot JSON = %s, want %s", got, want)
+	}
+
+	captured := &fakeLogger{}
+	dispatchSnapshot(context.Background(), captured, eventSnapshot{event: core.Event{Tool: "boundaries"}, extra: snapshot})
+	if got := marshalJSON(t, captured.snapshot()[0].Extra); got != want {
+		t.Fatalf("generic sink JSON = %s, want %s", got, want)
+	}
+
+	sink := &controlledSink{}
+	logger := testJSONL(sink, nil)
+	logger.logSnapshot(context.Background(), eventSnapshot{event: core.Event{Tool: "boundaries"}, extra: snapshot})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writes, _, _ := sink.snapshot()
+	if len(writes) != 1 {
+		t.Fatalf("JSONL writes = %d, want 1", len(writes))
+	}
+	var record struct {
+		Extra json.RawMessage `json:"extra"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(writes[0]), &record); err != nil {
+		t.Fatalf("decode JSONL record: %v", err)
+	}
+	if got := string(record.Extra); got != want {
+		t.Fatalf("JSONL Extra = %s, want %s", got, want)
 	}
 }
 
@@ -105,6 +145,15 @@ func TestComposedSinksApplyIndependentSnapshotFailurePolicies(t *testing.T) {
 	if got := attrs["extra.bad"].AsString(); got != "snapshot_error: json: unsupported type: func()" {
 		t.Fatalf("OTEL unsupported value = %q", got)
 	}
+}
+
+func marshalJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON: %v", err)
+	}
+	return string(encoded)
 }
 
 func containsReflectKind(value reflect.Value, target reflect.Kind) bool {

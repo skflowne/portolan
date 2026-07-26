@@ -302,8 +302,8 @@ func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 	if got := first.Extra["nested"].([]any)[0]; got != "before" {
 		t.Fatalf("fanout nested snapshot mutated to %v", got)
 	}
-	if got := first.Extra["numbers"].([]any)[0]; got != float64(1) {
-		t.Fatalf("fanout typed-slice snapshot mutated to %v", got)
+	if got := marshalJSON(t, first.Extra["numbers"].([]any)[0]); got != "1" {
+		t.Fatalf("fanout typed-slice snapshot mutated to %s", got)
 	}
 	if got := first.Extra["labels"].(map[string]any)["state"]; got != "before" {
 		t.Fatalf("fanout typed-map snapshot mutated to %v", got)
