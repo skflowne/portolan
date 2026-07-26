@@ -226,6 +226,42 @@ func TestFromConfigPreservesJSONLMarshalFallbackObservability(t *testing.T) {
 	}
 }
 
+func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	if _, ok := snapshotExtra(map[string]any{"cycle": cycle})["cycle"].(unencodableSnapshot); !ok {
+		t.Fatal("cyclic caller graph was retained instead of replaced by an immutable fallback marker")
+	}
+
+	called := make(chan struct{})
+	logger, err := FromConfig(core.Config{JSONLPath: filepath.Join(t.TempDir(), "events.jsonl")}, func(error) {
+		select {
+		case <-called:
+		default:
+			close(called)
+		}
+	})
+	if err != nil {
+		t.Fatalf("FromConfig: %v", err)
+	}
+	started := time.Now()
+	logger.Log(context.Background(), core.Event{Tool: "cycle", Extra: map[string]any{"cycle": cycle}})
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cyclic Extra blocked Log for %s", elapsed)
+	}
+	cycle["state"] = "after"
+	waitFor(t, called, "cyclic Extra diagnostic")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	jsonl := logger.(*defaultingLogger).inner.(*teeLogger).loggers[0].(*JSONLLogger)
+	if stats := jsonl.Stats(); stats.Accepted != 1 || stats.Written != 1 || stats.MarshalFallbacks != 1 {
+		t.Fatalf("cyclic Extra accounting = %+v", stats)
+	}
+}
+
 func TestFromConfigWithoutEndpointIsJSONLOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
