@@ -22,6 +22,9 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	firstDone := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	defer release()
 	var attempts atomic.Int32
 	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
 		if attempts.Add(1) == 1 {
@@ -38,19 +41,40 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 	go func() { firstResult <- p.ensureOpen(ctx, "/repo/a.ts") }()
 	waitSignal(t, firstStarted, "first file read")
 	cancel()
-	if err := waitTestError(t, firstResult, "canceled first open"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("first open error = %v, want context canceled", err)
+	select {
+	case err := <-firstResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first open error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		waitSignal(t, firstDone, "stale reader cleanup")
+		t.Fatal("first open did not return after cancellation")
 	}
 
-	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
-		t.Fatalf("retry open: %v", err)
+	retry := make(chan error, 1)
+	go func() { retry <- p.ensureOpen(context.Background(), "/repo/a.ts") }()
+	select {
+	case err := <-retry:
+		if err != nil {
+			t.Fatalf("retry open: %v", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		waitSignal(t, firstDone, "stale reader cleanup")
+		select {
+		case <-retry:
+		case <-time.After(time.Second):
+			t.Fatal("retry remained blocked after stale reader cleanup")
+		}
+		t.Fatal("retry blocked behind stale first-open work")
 	}
 	writer.waitForMethod(t, "textDocument/didOpen")
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("read attempts = %d, want 2", got)
 	}
 
-	close(releaseFirst)
+	release()
 	waitSignal(t, firstDone, "stale reader exit")
 	if methods := writer.methods(); len(methods) != 1 {
 		t.Fatalf("written methods after stale read completed = %v, want one didOpen", methods)
@@ -173,19 +197,31 @@ func TestCanceledSameFileWaiterDoesNotCancelOwner(t *testing.T) {
 
 func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	writer := &cancelOnSuccessWriteCloser{cancel: cancel}
+	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
 	p.openFiles = make(map[string]*openTransition)
 	p.readFile = func(context.Context, string) ([]byte, error) { return []byte("source"), nil }
+	dispatched := make(chan struct{})
+	releasePublication := make(chan struct{})
+	p.afterFrameDispatch = func() {
+		close(dispatched)
+		<-releasePublication
+	}
 
-	if err := p.ensureOpen(ctx, "/repo/a.ts"); err != nil {
+	result := make(chan error, 1)
+	go func() { result <- p.ensureOpen(ctx, "/repo/a.ts") }()
+	waitSignal(t, dispatched, "didOpen dispatch")
+	cancel()
+	close(releasePublication)
+	if err := waitTestError(t, result, "didOpen publication"); err != nil {
 		t.Fatalf("first open: %v", err)
 	}
+	p.afterFrameDispatch = nil
 	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
 		t.Fatalf("cached open: %v", err)
 	}
-	if got := writer.writeCalls(); got != 1 {
-		t.Fatalf("write calls = %d, want one canonical didOpen", got)
+	if methods := writer.methods(); len(methods) != 1 {
+		t.Fatalf("written methods = %v, want one canonical didOpen", methods)
 	}
 }
 
@@ -221,28 +257,6 @@ func TestInitializeUsesDedicatedContextForRequestAndNotification(t *testing.T) {
 	if remaining <= 5*time.Second || remaining > initializeTimeout {
 		t.Fatalf("initialize budget remaining = %v, want (5s, %v]", remaining, initializeTimeout)
 	}
-}
-
-type cancelOnSuccessWriteCloser struct {
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	writes int
-}
-
-func (w *cancelOnSuccessWriteCloser) Write(data []byte) (int, error) {
-	w.mu.Lock()
-	w.writes++
-	w.mu.Unlock()
-	w.cancel()
-	return len(data), nil
-}
-
-func (w *cancelOnSuccessWriteCloser) Close() error { return nil }
-
-func (w *cancelOnSuccessWriteCloser) writeCalls() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.writes
 }
 
 func waitSignal(t *testing.T, signal <-chan struct{}, operation string) {

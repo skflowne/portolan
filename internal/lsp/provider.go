@@ -26,13 +26,11 @@ const (
 	// than a steady-state definition/references/documentSymbol call.
 	initializeTimeout = 20 * time.Second
 
-	// shutdownTimeout bounds the best-effort shutdown handshake in Close.
-	shutdownTimeout = 2 * time.Second
-
-	// exitWait bounds graceful process exit; killWait bounds reaping after a
-	// forced kill so shutdown never performs an unconditional wait.
-	exitWait = 3 * time.Second
-	killWait = time.Second
+	// The shutdown defaults bound the best-effort handshake, graceful process
+	// exit, and reaping after a forced kill.
+	defaultShutdownTimeout = 2 * time.Second
+	defaultExitWait        = 3 * time.Second
+	defaultKillWait        = time.Second
 )
 
 // Provider is a core.LanguageProvider backed by a tsgo --lsp -stdio
@@ -53,12 +51,21 @@ type Provider struct {
 	stdinCloseOnce sync.Once
 	stdinCloseErr  error
 	killProcess    func() error
+	waitProcess    func() error
 
 	openMu    sync.Mutex
 	openFiles map[string]*openTransition
 	readFile  func(context.Context, string) ([]byte, error)
 
-	stderrBuf *stderrBuffer
+	stderrBuf                *stderrBuffer
+	internalWriteTimeout     time.Duration
+	cancellationWriteTimeout time.Duration
+	shutdownTimeout          time.Duration
+	exitWait                 time.Duration
+	killWait                 time.Duration
+	afterFrameDispatch       func()
+	observeRequestContext    func(context.Context)
+	observeCancellation      func(error)
 }
 
 // compile-time assertion that Provider satisfies core.LanguageProvider.
@@ -104,7 +111,13 @@ func New(cfg core.Config) (*Provider, error) {
 		readFile: func(_ context.Context, path string) ([]byte, error) {
 			return os.ReadFile(path)
 		},
-		killProcess: cmd.Process.Kill,
+		killProcess:              cmd.Process.Kill,
+		waitProcess:              cmd.Wait,
+		internalWriteTimeout:     defaultInternalWriteTimeout,
+		cancellationWriteTimeout: defaultCancellationWriteTimeout,
+		shutdownTimeout:          defaultShutdownTimeout,
+		exitWait:                 defaultExitWait,
+		killWait:                 defaultKillWait,
 	}
 
 	go p.stderrBuf.drain(stderr)
@@ -156,7 +169,7 @@ func initializeProvider(rootURI, rootName string, request requestFunc, notify no
 // killAndWait force-terminates the subprocess; used on setup failure paths.
 func (p *Provider) killAndWait() {
 	p.abortTransport(errProviderClosed)
-	p.waitForProcess(exitWait)
+	p.waitForProcess(p.exitWait)
 }
 
 // prepareOpen resolves file to an absolute path, ensures it has been sent to
