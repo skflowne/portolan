@@ -95,23 +95,8 @@ func (d *diagnosticDispatcher) closeBy(deadline time.Time) error {
 		close(d.queue)
 		d.mu.Unlock()
 
-		select {
-		case <-d.done:
-		default:
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				d.timeouts.Add(1)
-			} else {
-				timer := time.NewTimer(remaining)
-				select {
-				case <-d.done:
-					if !timer.Stop() {
-						<-timer.C
-					}
-				case <-timer.C:
-					d.timeouts.Add(1)
-				}
-			}
+		if _, completed := receiveByDeadline(d.done, deadline); !completed {
+			d.timeouts.Add(1)
 		}
 
 		stats := d.stats()

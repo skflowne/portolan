@@ -24,9 +24,7 @@ func FromConfig(cfg core.Config, diagnostic ...func(error)) (core.Logger, error)
 	if len(diagnostic) > 0 {
 		report = diagnostic[0]
 	}
-	jsonlOpts := defaultJSONLOptions()
-	jsonlOpts.diagnostic = report
-	jsonl, err := newJSONL(cfg.JSONLPath, jsonlOpts)
+	jsonl, err := NewJSONL(cfg.JSONLPath, report)
 	if err != nil {
 		return nil, err
 	}

@@ -58,21 +58,16 @@ func (t *teeLogger) Close() error {
 
 		var errs []error
 		for range t.loggers {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
+			if !time.Now().Before(deadline) {
 				errs = append(errs, fmt.Errorf("telemetry: composite shutdown timeout"))
 				break
 			}
-			timer := time.NewTimer(remaining)
-			select {
-			case err := <-results:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				errs = append(errs, err)
-			case <-timer.C:
+			err, completed := receiveByDeadline(results, deadline)
+			if !completed {
 				errs = append(errs, fmt.Errorf("telemetry: composite shutdown timeout"))
+				break
 			}
+			errs = append(errs, err)
 			if time.Now().After(deadline) {
 				break
 			}
