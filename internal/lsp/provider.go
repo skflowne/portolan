@@ -196,25 +196,29 @@ type openTransition struct {
 }
 
 type fileReadResult struct {
-	data []byte
+	text string
 	err  error
 }
 
-func (p *Provider) readFileContext(ctx context.Context, path string) ([]byte, error) {
+func (p *Provider) readFileContext(ctx context.Context, path string) (string, error) {
 	result := make(chan fileReadResult, 1)
 	go func() {
 		data, err := p.readFile(ctx, path)
-		result <- fileReadResult{data: data, err: err}
+		text := ""
+		if err == nil {
+			text = string(data)
+		}
+		result <- fileReadResult{text: text, err: err}
 	}()
 	select {
 	case got := <-result:
-		return got.data, got.err
+		return got.text, got.err
 	case <-ctx.Done():
 		select {
 		case got := <-result:
-			return got.data, got.err
+			return got.text, got.err
 		default:
-			return nil, ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 }
@@ -261,7 +265,7 @@ func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
 }
 
 func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
-	data, err := p.readFileContext(ctx, absFile)
+	text, err := p.readFileContext(ctx, absFile)
 	if err != nil {
 		return fmt.Errorf("lsp: reading %s: %w", absFile, err), p.retryableOpenError(ctx, err)
 	}
@@ -270,7 +274,7 @@ func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
 			URI:        uriFromPath(absFile),
 			LanguageID: languageIDForFile(absFile),
 			Version:    1,
-			Text:       string(data),
+			Text:       text,
 		},
 	}
 	if err := p.notify(ctx, "textDocument/didOpen", params); err != nil {
