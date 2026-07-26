@@ -213,7 +213,7 @@ flowchart LR
 
 **Phase 0 exit criteria — all green:** MCP round-trip works · every call logged (JSONL) · Tier A
 retrieval-correctness green on a pinned TS repo (`eval/tiera`, which drives the *real* daemon over
-MCP). 125 Go tests pass across 10 packages.
+MCP).
 
 ---
 
