@@ -224,12 +224,10 @@ func TestReadLoopFailureReleasesPendingWithCause(t *testing.T) {
 	}
 }
 
-func TestCallWaitUsesCallerContextWithoutNestedDeadline(t *testing.T) {
+func TestCallDeadlineRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
-	observed := make(chan context.Context, 1)
-	p.observeRequestContext = func(ctx context.Context) { observed <- ctx }
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
@@ -237,24 +235,11 @@ func TestCallWaitUsesCallerContextWithoutNestedDeadline(t *testing.T) {
 		result <- err
 	}()
 	writer.waitForMethod(t, "caller-budget")
-	select {
-	case got := <-observed:
-		if got != ctx {
-			t.Fatal("call replaced the caller context")
-		}
-		gotDeadline, _ := got.Deadline()
-		wantDeadline, _ := ctx.Deadline()
-		if !gotDeadline.Equal(wantDeadline) {
-			t.Fatalf("wait deadline = %v, want %v", gotDeadline, wantDeadline)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("call did not reach response wait")
+	if err := waitError(t, result, "caller-budget call"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("call error = %v, want deadline exceeded", err)
 	}
-	if !p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
-		t.Fatal("response was not delivered")
-	}
-	if err := waitError(t, result, "caller-budget call"); err != nil {
-		t.Fatalf("call: %v", err)
+	if p.lifecycle.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+		t.Fatal("late response completed timed-out request")
 	}
 }
 

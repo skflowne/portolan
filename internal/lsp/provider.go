@@ -64,7 +64,6 @@ type Provider struct {
 	exitWait                 time.Duration
 	killWait                 time.Duration
 	afterFrameDispatch       func()
-	observeRequestContext    func(context.Context)
 	observeCancellation      func(error)
 }
 

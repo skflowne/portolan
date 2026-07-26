@@ -232,9 +232,6 @@ func (p *Provider) call(ctx context.Context, method string, params any) (json.Ra
 		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", writeErr)})
 	}
 
-	if p.observeRequestContext != nil {
-		p.observeRequestContext(ctx)
-	}
 	result, canceled := p.waitPending(ctx, key, request)
 	if canceled && dispatched {
 		p.sendCancellation(id)
