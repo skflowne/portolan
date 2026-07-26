@@ -15,6 +15,10 @@ instructions there.
 - Read the relevant parts of `PLAN.md`, `ARCHITECTURE.md`, and linked decision documents.
 - Keep changes cohesive. Include structural work required for correctness and maintainability, but
   report unrelated defects instead of mixing them into the change.
+- Before editing, trace the current path far enough to identify the smallest complete change that
+  satisfies the request through the existing owner. Prefer changing that owner and its callers over
+  adding a parallel mechanism. Minimal means the least responsibility-changing diff, not the fewest
+  lines: include migrations required for correctness, but leave unrelated cleanup alone.
 
 Before adding or relocating a package, shared helper, type, constant, protocol shape, or stateful
 mechanism:
@@ -135,8 +139,11 @@ No non-test `.go` file may exceed 400 lines. Pre-existing oversized files may no
 responsibilities in the same change when modifying behavior there. Do not evade the limit with
 meaningless `helpers.go`, `utils.go`, or `misc.go` files—name files for the responsibility they own.
 
-Comments and package docs describe current contracts and non-obvious invariants, not implementation
-history, review narratives, phases, or temporary reasoning.
+Code comments are exceptional. Add one only to prevent a real footgun: a non-obvious invariant,
+safety constraint, or dependency behavior that a future maintainer could plausibly violate. Explain
+why, not what. Never narrate obvious code or reference the current task, issue, review,
+implementation steps or phases, or temporary state. Package docs may state the current contract and
+ownership, but follow the same no-narrative rule.
 
 ## Verification
 
