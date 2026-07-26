@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
@@ -57,7 +58,9 @@ func snapshotExtra(extra map[string]any) extraSnapshot {
 			continue
 		}
 		var detached any
-		if err := json.Unmarshal(encoded, &detached); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.UseNumber()
+		if err := decoder.Decode(&detached); err != nil {
 			snapshot.entries[key] = extraSnapshotEntry{failure: err.Error()}
 			continue
 		}
