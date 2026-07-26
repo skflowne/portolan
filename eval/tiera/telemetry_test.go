@@ -85,7 +85,7 @@ func stopTelemetryDaemon(t *testing.T, d *testinfra.Daemon, sess *mcp.ClientSess
 	t.Helper()
 	_ = sess.Close()
 	_ = d.Stdin.Close()
-	if err, ok := d.WaitForExit(5 * time.Second); !ok {
+	if err, ok := d.WaitForExit(testinfra.ShortWait); !ok {
 		t.Fatal("daemon did not exit within telemetry shutdown bound")
 	} else if err != nil {
 		t.Fatalf("daemon exit: %v (stderr=%s)", err, d.Stderr())
@@ -227,7 +227,7 @@ func TestDaemonStalledOTLPShutdownIsBoundedAndJSONLComplete(t *testing.T) {
 		t.Fatal("stalled OTLP request did not start")
 	}
 	started := time.Now()
-	if err, ok := d.WaitForExit(5 * time.Second); !ok {
+	if err, ok := d.WaitForExit(testinfra.ShortWait); !ok {
 		t.Fatal("daemon hung on stalled OTLP collector")
 	} else if err != nil {
 		t.Fatalf("daemon failed during bounded OTLP shutdown: %v (stderr=%s)", err, d.Stderr())

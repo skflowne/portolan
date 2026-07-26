@@ -17,7 +17,7 @@ passthrough tools (`find_definition` / `find_references` / `get_outline`) over a
 provider, deterministic daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
 with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
 that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed
-on stderr. The repository has **114 automated tests**. **Phase 1 (the staleness barrier) is next.**
+on stderr. **Phase 1 (the staleness barrier) is next.**
 
 Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or the standard base
 `OTEL_EXPORTER_OTLP_ENDPOINT`) to enable the OTLP/HTTP mirror. With neither configured, the daemon
