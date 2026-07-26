@@ -162,6 +162,11 @@ func newOTELLogger(exporter sdktrace.SpanExporter, opts otelOptions) (*OTELLogge
 // Log creates and ends one synthetic span. OnEnd only enqueues into the SDK
 // processor; exporter latency never runs on this caller.
 func (o *OTELLogger) Log(ctx context.Context, ev core.Event) {
+	o.logSnapshot(ctx, snapshotEvent(ev))
+}
+
+func (o *OTELLogger) logSnapshot(ctx context.Context, snapshot eventSnapshot) {
+	ev := snapshot.event
 	if o.closedState.Load() {
 		o.counters.postCloseDrops.Add(1)
 		o.diag.report(fmt.Errorf("telemetry: OTEL log after close tool=%q", ev.Tool))
@@ -207,7 +212,12 @@ func (o *OTELLogger) Log(ctx context.Context, ev core.Event) {
 		attrs = append(attrs, attribute.String("err", ev.Err))
 		span.SetStatus(codes.Error, ev.Err)
 	}
-	for key, value := range ev.Extra {
+	for _, key := range snapshot.extra.keys() {
+		value, failure := snapshot.extra.value(key)
+		if failure != "" {
+			attrs = append(attrs, attribute.String("extra."+key, "snapshot_error: "+failure))
+			continue
+		}
 		attrs = append(attrs, attribute.String("extra."+key, toString(value)))
 	}
 	span.SetAttributes(attrs...)

@@ -148,6 +148,11 @@ func newJSONLLogger(sink jsonlSink, opts jsonlOptions) *JSONLLogger {
 // Log snapshots and admits ev. Capacity is tried before ctx so a pre-canceled
 // completed call is still recorded when a slot is immediately available.
 func (l *JSONLLogger) Log(ctx context.Context, ev core.Event) {
+	l.logSnapshot(ctx, snapshotEvent(ev))
+}
+
+func (l *JSONLLogger) logSnapshot(ctx context.Context, snapshot eventSnapshot) {
+	ev := snapshot.event
 	if l.closedState.Load() {
 		l.counters.postCloseDrops.Add(1)
 		l.diag.report(fmt.Errorf("telemetry: log after close tool=%q", ev.Tool))
@@ -159,7 +164,7 @@ func (l *JSONLLogger) Log(ctx context.Context, ev core.Event) {
 		return
 	}
 
-	line, oversize, fallback := encodeJSONLRecord(ev, l.opts.maxRecordBytes)
+	line, oversize, fallback := encodeJSONLRecord(snapshot, l.opts.maxRecordBytes)
 	if oversize {
 		l.counters.oversizeRecords.Add(1)
 		l.diag.report(fmt.Errorf("telemetry: capped oversize JSONL event tool=%q", ev.Tool))

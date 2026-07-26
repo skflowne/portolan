@@ -188,6 +188,28 @@ func TestTee_FansOutToAllLoggers(t *testing.T) {
 	}
 }
 
+func TestTeeSnapshotsOnceBeforeFanout(t *testing.T) {
+	a := &fakeLogger{}
+	b := &fakeLogger{}
+	logger := Tee(a, b)
+	nested := []any{"before"}
+
+	logger.Log(context.Background(), core.Event{Tool: "snapshot", Extra: map[string]any{"nested": nested}})
+	nested[0] = "after"
+
+	first := a.snapshot()[0]
+	second := b.snapshot()[0]
+	if first.Timestamp == "" || first.Timestamp != second.Timestamp {
+		t.Fatalf("fanout timestamps = %q and %q", first.Timestamp, second.Timestamp)
+	}
+	if got := first.Extra["nested"].([]any)[0]; got != "before" {
+		t.Fatalf("first sink snapshot = %v, want before", got)
+	}
+	if got := second.Extra["nested"].([]any)[0]; got != "before" {
+		t.Fatalf("second sink snapshot = %v, want before", got)
+	}
+}
+
 func TestTee_SkipsNilLoggers(t *testing.T) {
 	a := &fakeLogger{}
 	tee := Tee(a, nil)
@@ -231,9 +253,6 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
 	cycle := map[string]any{}
 	cycle["self"] = cycle
-	if _, ok := snapshotExtra(map[string]any{"cycle": cycle})["cycle"].(unencodableSnapshot); !ok {
-		t.Fatal("cyclic caller graph was retained instead of replaced by an immutable fallback marker")
-	}
 
 	called := make(chan struct{})
 	var diagnosticsMu sync.Mutex

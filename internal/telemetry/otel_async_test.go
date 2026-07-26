@@ -256,6 +256,29 @@ func TestOTELCloseIsBoundedStableAndAdjudicatesPending(t *testing.T) {
 	waitFor(t, exporter.shutdownDone, "exporter shutdown after release")
 }
 
+func TestOTELSnapshotFailureUsesStableSinkOwnedRepresentation(t *testing.T) {
+	exporter := &capturingExporter{}
+	otel := testOTEL(t, exporter, nil)
+	logger := &defaultingLogger{inner: Tee(otel)}
+
+	logger.Log(context.Background(), core.Event{Tool: "unsupported", Extra: map[string]any{"bad": func() {}}})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	spans := exporter.snapshot()
+	if len(spans) != 1 {
+		t.Fatalf("exported spans = %d, want 1", len(spans))
+	}
+	attrs := attributesByName(spans[0].Attributes)
+	const want = "snapshot_error: json: unsupported type: func()"
+	if got := attrs["extra.bad"].AsString(); got != want {
+		t.Fatalf("OTEL unsupported value = %q, want %q", got, want)
+	}
+	if stats := otel.Stats(); stats.Accepted != 1 || stats.Exported != 1 {
+		t.Fatalf("OTEL stats = %+v", stats)
+	}
+}
+
 func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 	a := &fakeLogger{}
 	b := &fakeLogger{}
