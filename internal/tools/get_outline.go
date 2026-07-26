@@ -48,6 +48,9 @@ type GetOutlineOutput struct {
 // doc for the shared found/error/cap/freshness/telemetry contract, and
 // OutlineSymbol's doc for the flattening/Depth shape decision.
 func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineOutput, error) {
+	ctx, cancel := t.operationContext(ctx)
+	defer cancel()
+
 	start := time.Now()
 	fresh := t.Gen.Current()
 	out := GetOutlineOutput{Freshness: fresh}
