@@ -438,13 +438,41 @@ func TestToolOperationDeadlineCancelsProvider(t *testing.T) {
 	logger := &capturingLogger{}
 	tl := newTestTools(provider, logger, core.Config{})
 	tl.operationTimeout = 10 * time.Millisecond
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	out, err := tl.GetOutline(context.Background(), GetOutlineInput{File: "/repo/main.go"})
-	if err != nil {
-		t.Fatalf("GetOutline returned Go error: %v", err)
+	result := make(chan struct {
+		out GetOutlineOutput
+		err error
+	}, 1)
+	go func() {
+		out, err := tl.GetOutline(parent, GetOutlineInput{File: "/repo/main.go"})
+		result <- struct {
+			out GetOutlineOutput
+			err error
+		}{out: out, err: err}
+	}()
+
+	var got struct {
+		out GetOutlineOutput
+		err error
 	}
-	if out.Error != context.DeadlineExceeded.Error() {
-		t.Fatalf("soft error = %q, want %q", out.Error, context.DeadlineExceeded)
+	select {
+	case got = <-result:
+	case <-time.After(time.Second):
+		cancel()
+		select {
+		case <-result:
+		case <-time.After(time.Second):
+			t.Fatal("tool ignored both operation and parent cancellation")
+		}
+		t.Fatal("tool did not honor its operation deadline")
+	}
+	if got.err != nil {
+		t.Fatalf("GetOutline returned Go error: %v", got.err)
+	}
+	if got.out.Error != context.DeadlineExceeded.Error() {
+		t.Fatalf("soft error = %q, want %q", got.out.Error, context.DeadlineExceeded)
 	}
 	if logger.count() != 1 {
 		t.Fatalf("telemetry events = %d, want 1", logger.count())
