@@ -327,4 +327,5 @@ func (t *transport) abort(cause error) {
 	completePending(waiting, cause)
 	_ = t.closeInput()
 	t.kill()
+	t.startProcessWait()
 }
