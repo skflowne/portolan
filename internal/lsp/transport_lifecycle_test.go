@@ -1,11 +1,13 @@
 package lsp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +82,106 @@ func TestTransportCloseTransitionOwnsPendingAndWriteAdmission(t *testing.T) {
 		if err := connection.admitWrite(policy); !errors.Is(err, errProviderClosed) {
 			t.Fatalf("write policy %v after close = %v, want provider closed", policy, err)
 		}
+	}
+}
+
+type closeWindowWriter struct {
+	*recordingWriteCloser
+	closed       atomic.Bool
+	closeStarted chan struct{}
+	releaseClose chan struct{}
+	writes       atomic.Int32
+}
+
+func newCloseWindowWriter() *closeWindowWriter {
+	return &closeWindowWriter{
+		recordingWriteCloser: newRecordingWriteCloser(),
+		closeStarted:         make(chan struct{}),
+		releaseClose:         make(chan struct{}),
+	}
+}
+
+func (w *closeWindowWriter) Write(data []byte) (int, error) {
+	w.writes.Add(1)
+	if w.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	return w.recordingWriteCloser.Write(data)
+}
+
+func (w *closeWindowWriter) Close() error {
+	w.closed.Store(true)
+	close(w.closeStarted)
+	<-w.releaseClose
+	return w.recordingWriteCloser.Close()
+}
+
+type signalingJSONMarshaler struct {
+	marshaled chan struct{}
+}
+
+func (m signalingJSONMarshaler) MarshalJSON() ([]byte, error) {
+	close(m.marshaled)
+	return []byte(`{"jsonrpc":"2.0","id":"server-1","error":{"code":-32601,"message":"method not found"}}`), nil
+}
+
+func TestTransportRejectsServerResponseAfterInputCloseBegins(t *testing.T) {
+	writer := newCloseWindowWriter()
+	connection := newUnitProvider(writer, nil).transport
+	var kills atomic.Int32
+	var waits atomic.Int32
+	connection.killProcess = func() error {
+		kills.Add(1)
+		return nil
+	}
+	connection.waitProcess = func() error {
+		waits.Add(1)
+		return nil
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- connection.Close() }()
+	writer.waitForShutdown(t)
+	if !connection.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+		t.Fatal("shutdown response was not delivered")
+	}
+	close(writer.releaseShutdown)
+	waitSignal(t, writer.closeStarted, "input close start")
+
+	state, cause := transportStateAndCause(connection)
+	if state != transportClosing || !errors.Is(cause, errProviderClosed) {
+		t.Fatalf("transport during input close = (%v, %v), want closing/provider closed", state, cause)
+	}
+
+	message := signalingJSONMarshaler{marshaled: make(chan struct{})}
+	type writeResult struct {
+		dispatched bool
+		err        error
+	}
+	responseResult := make(chan writeResult, 1)
+	go func() {
+		dispatched, err := connection.writeMessage(context.Background(), writeServerResponse, message)
+		responseResult <- writeResult{dispatched: dispatched, err: err}
+	}()
+	waitSignal(t, message.marshaled, "server response marshal")
+	close(writer.releaseClose)
+
+	response := <-responseResult
+	if response.dispatched || !errors.Is(response.err, errProviderClosed) {
+		t.Fatalf("server response after input close = (%v, %v), want rejected/provider closed", response.dispatched, response.err)
+	}
+	if err := <-closeResult; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := writer.writes.Load(); got != 2 {
+		t.Fatalf("frame write attempts = %d, want shutdown and exit only", got)
+	}
+	state, cause = transportStateAndCause(connection)
+	if state != transportClosed || !errors.Is(cause, errProviderClosed) {
+		t.Fatalf("terminal transport = (%v, %v), want closed/provider closed", state, cause)
+	}
+	if kills.Load() != 0 || waits.Load() != 1 {
+		t.Fatalf("process cleanup calls: kill=%d wait=%d, want 0/1", kills.Load(), waits.Load())
 	}
 }
 

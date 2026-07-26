@@ -77,11 +77,12 @@ type transport struct {
 	connErr error
 	pending map[string]*pendingRequest
 
-	input     io.WriteCloser
-	output    *bufio.Reader
-	stderr    *stderrBuffer
-	writeGate chan struct{}
-	nextID    atomic.Int64
+	input       io.WriteCloser
+	inputClosed bool
+	output      *bufio.Reader
+	stderr      *stderrBuffer
+	writeGate   chan struct{}
+	nextID      atomic.Int64
 
 	closeOnce     sync.Once
 	closeErr      error
@@ -171,7 +172,7 @@ func (t *transport) admitWrite(policy writePolicy) error {
 	case writeShutdown, writeExit:
 		allowed = t.state == transportClosing
 	}
-	if allowed {
+	if allowed && !t.inputClosed {
 		return nil
 	}
 	return t.connectionErrorLocked()
@@ -297,8 +298,26 @@ func (t *transport) writeAdmittedFrameLocked(ctx context.Context, policy writePo
 	return t.writeFrameLocked(ctx, data)
 }
 
+func (t *transport) closeInputAfterWrites(ctx context.Context) error {
+	t.mu.Lock()
+	closing := t.state == transportClosing && !t.inputClosed
+	t.mu.Unlock()
+	if !closing {
+		return t.closeInput()
+	}
+	if err := t.lockWrite(ctx); err != nil {
+		t.abort(err)
+		return err
+	}
+	defer t.unlockWrite()
+	return t.closeInput()
+}
+
 func (t *transport) closeInput() error {
 	t.inputOnce.Do(func() {
+		t.mu.Lock()
+		t.inputClosed = true
+		t.mu.Unlock()
 		if t.input != nil {
 			t.inputCloseErr = t.input.Close()
 		}
