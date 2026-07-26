@@ -581,13 +581,13 @@ func TestTreeTransformsHonorContext(t *testing.T) {
 	}}
 
 	t.Run("resolve", func(t *testing.T) {
-		ctx := newCancelOnCheckContext(2)
+		ctx := newCancelOnCheckContext(4)
 		if _, _, err := resolveSymbolPosition(ctx, symbols, "Target", nil); !errors.Is(err, context.Canceled) {
 			t.Fatalf("resolveSymbolPosition error = %v, want context canceled", err)
 		}
 	})
 	t.Run("flatten", func(t *testing.T) {
-		ctx := newCancelOnCheckContext(2)
+		ctx := newCancelOnCheckContext(4)
 		if out, truncated, err := flattenSymbols(ctx, symbols, 10); !errors.Is(err, context.Canceled) || out != nil || truncated {
 			t.Fatalf("flattenSymbols = (%v, %v, %v), want no partial output and context canceled", out, truncated, err)
 		}
@@ -623,26 +623,27 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 		message   string
 		err       error
 	}
+	definitionCall := func(ctx context.Context, tl *Tools) result {
+		out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
+		return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
+	}
+	referencesCall := func(ctx context.Context, tl *Tools) result {
+		out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
+		return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
+	}
 	cases := []struct {
-		name string
-		call func(context.Context, *Tools) result
+		name        string
+		cancelStage string
+		secondCalls int
+		call        func(context.Context, *Tools) result
 	}{
+		{name: "definition_symbols", cancelStage: "symbols", call: definitionCall},
+		{name: "definition_result", cancelStage: "definition", secondCalls: 1, call: definitionCall},
+		{name: "references_symbols", cancelStage: "symbols", call: referencesCall},
+		{name: "references_result", cancelStage: "references", secondCalls: 1, call: referencesCall},
 		{
-			name: "find_definition",
-			call: func(ctx context.Context, tl *Tools) result {
-				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
-				return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
-			},
-		},
-		{
-			name: "find_references",
-			call: func(ctx context.Context, tl *Tools) result {
-				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
-				return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
-			},
-		},
-		{
-			name: "get_outline",
+			name:        "outline_symbols",
+			cancelStage: "symbols",
 			call: func(ctx context.Context, tl *Tools) result {
 				out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
 				return result{out.Found, out.Truncated, len(out.Symbols), out.Error, out.Message, err}
@@ -654,7 +655,7 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			provider := &cancelingResultProvider{cancel: cancel, file: file}
+			provider := &cancelingResultProvider{cancel: cancel, cancelStage: tc.cancelStage, file: file}
 			logger := &capturingLogger{}
 			tl := newTestTools(provider, logger, core.Config{})
 
@@ -668,8 +669,8 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 			if got.errText != context.Canceled.Error() || got.message == "" {
 				t.Fatalf("soft result error=%q message=%q, want context canceled with message", got.errText, got.message)
 			}
-			if provider.secondStageCalls() != 0 {
-				t.Fatalf("second-stage calls = %d, want 0", provider.secondStageCalls())
+			if provider.secondStageCalls() != tc.secondCalls {
+				t.Fatalf("second-stage calls = %d, want %d", provider.secondStageCalls(), tc.secondCalls)
 			}
 			if logger.count() != 1 {
 				t.Fatalf("telemetry events = %d, want 1", logger.count())
@@ -753,8 +754,9 @@ func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file str
 func (p *contextRecordingProvider) Close() error { return nil }
 
 type cancelingResultProvider struct {
-	cancel context.CancelFunc
-	file   string
+	cancel      context.CancelFunc
+	cancelStage string
+	file        string
 
 	mu          sync.Mutex
 	secondCalls int
@@ -764,6 +766,9 @@ func (p *cancelingResultProvider) Definition(_ context.Context, file string, _ c
 	p.mu.Lock()
 	p.secondCalls++
 	p.mu.Unlock()
+	if p.cancelStage == "definition" {
+		p.cancel()
+	}
 	return []core.Location{{File: file}}, nil
 }
 
@@ -771,11 +776,16 @@ func (p *cancelingResultProvider) References(_ context.Context, file string, _ c
 	p.mu.Lock()
 	p.secondCalls++
 	p.mu.Unlock()
+	if p.cancelStage == "references" {
+		p.cancel()
+	}
 	return []core.Location{{File: file}}, nil
 }
 
 func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) ([]core.Symbol, error) {
-	p.cancel()
+	if p.cancelStage == "symbols" {
+		p.cancel()
+	}
 	return []core.Symbol{{
 		Name: "Container",
 		File: p.file,

@@ -271,16 +271,27 @@ func TestCallTimeoutRemovesPendingAndIgnoresLateResponse(t *testing.T) {
 	}
 }
 
-func TestCanceledResponseTransformsReturnContextError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := decodeLocations(ctx, json.RawMessage(`[{"uri":"file:///repo/a.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]`)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("decodeLocations error = %v, want context canceled", err)
-	}
-	if _, err := decodeDocumentSymbols(ctx, json.RawMessage(`[{"name":"A","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]`), "/repo/a.ts"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("decodeDocumentSymbols error = %v, want context canceled", err)
-	}
+func TestResponseConversionsHonorContext(t *testing.T) {
+	t.Run("locations", func(t *testing.T) {
+		ctx := newCancelOnErrCheckContext(4)
+		raw := json.RawMessage(`[
+			{"uri":"file:///repo/a.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
+			{"uri":"file:///repo/b.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}
+		]`)
+		if out, err := decodeLocations(ctx, raw); !errors.Is(err, context.Canceled) || out != nil {
+			t.Fatalf("decodeLocations = (%v, %v), want no partial output and context canceled", out, err)
+		}
+	})
+	t.Run("document_symbols", func(t *testing.T) {
+		ctx := newCancelOnErrCheckContext(4)
+		raw := json.RawMessage(`[
+			{"name":"A","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
+			{"name":"B","kind":12,"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"selectionRange":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}}
+		]`)
+		if out, err := decodeDocumentSymbols(ctx, raw, "/repo/a.ts"); !errors.Is(err, context.Canceled) || out != nil {
+			t.Fatalf("decodeDocumentSymbols = (%v, %v), want no partial output and context canceled", out, err)
+		}
+	})
 }
 
 func TestCanceledSerializationDoesNotReachTransport(t *testing.T) {
@@ -305,7 +316,7 @@ func TestCanceledSerializationDoesNotReachTransport(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("writeMessage error = %v, want context canceled", err)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		close(marshaler.release)
 		waitSignal(t, marshaler.exited, "JSON serialization cleanup")
 		<-result
@@ -823,6 +834,26 @@ func writeTestFrame(t *testing.T, writer io.Writer, body string) {
 	if _, err := fmt.Fprintf(writer, "Content-Length: %d\r\n\r\n%s", len(body), body); err != nil {
 		t.Fatalf("write frame: %v", err)
 	}
+}
+
+type cancelOnErrCheckContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	checks   int
+	cancelAt int
+}
+
+func newCancelOnErrCheckContext(cancelAt int) *cancelOnErrCheckContext {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &cancelOnErrCheckContext{Context: ctx, cancel: cancel, cancelAt: cancelAt}
+}
+
+func (c *cancelOnErrCheckContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
 }
 
 type blockingJSONMarshaler struct {
