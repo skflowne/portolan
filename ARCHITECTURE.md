@@ -126,17 +126,20 @@ context covers path preparation, first-open disk reads and `didOpen`, name resol
 requests, serialization, pipe writes, and response waits; the provider does not reset the deadline
 between stages. Provider initialization keeps its separate 20-second budget for project loading.
 
-The `lsp.Provider` is concurrency-safe: one background reader goroutine demuxes responses by
-JSON-RPC id into per-request lifecycle entries that accept exactly one terminal response or error.
-Response delivery, cancellation cleanup, connection failure, and explicit close share that owner,
-so late responses are ignored. Per-file open transitions retain one canonical `didOpen` while
-allowing unrelated files to read concurrently. A context-aware write gate serializes complete frames;
-cancellation before dispatch writes nothing, cancellation that wins after dispatch removes the
-pending request and schedules a bounded best-effort `$/cancelRequest` (dropped if its write gate
-budget expires), and cancellation during a blocked or partial frame closes the pipe and kills the
-now-unusable subprocess. Server-initiated requests such as `client/registerCapability`
-are answered asynchronously within a bounded internal-write budget, so they cannot stall response
-demultiplexing.
+The `lsp.Provider` is concurrency-safe and delegates JSON-RPC connection ownership to one
+`transport`. That owner arbitrates open, closing, closed, and aborted states; pending-request
+completion; write admission; stdin closure; process kill and reap; and repeated close or abort.
+External requests, notifications, and `$/cancelRequest` writes are admitted only while open. The
+shutdown request owns the transition to closing, server-request responses remain permitted while
+open or closing, `exit` is permitted only while closing, and terminal states reject every frame.
+One background reader goroutine demuxes responses into pending entries that accept exactly one
+terminal response or error, so late responses are ignored. Per-file open transitions retain one
+canonical `didOpen` while allowing unrelated files to read concurrently. A context-aware write gate
+serializes complete frames; cancellation before dispatch writes nothing, cancellation that wins
+after dispatch removes the pending request and schedules a bounded best-effort cancellation
+notification, and cancellation during a blocked or partial frame aborts the transport. Server
+requests such as `client/registerCapability` are answered asynchronously within a bounded
+server-response budget, so they cannot stall response demultiplexing.
 
 ---
 
