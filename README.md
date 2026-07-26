@@ -16,7 +16,7 @@ of how places reach each other, rather than a picture of the terrain.)
 passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
 provider, deterministic daemon/control-socket/LSP cancellation lifecycle, JSONL telemetry,
 WSL↔Windows path handling, and a Tier A retrieval-correctness gate that drives the real daemon over
-MCP. The repository has **109 automated tests**. **Phase 1 (the staleness barrier) is next.**
+MCP. The repository has **111 automated tests**. **Phase 1 (the staleness barrier) is next.**
 
 Docs:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **visual architecture** (Mermaid diagrams): components, request flow, the staleness barrier, package graph, phase roadmap.
