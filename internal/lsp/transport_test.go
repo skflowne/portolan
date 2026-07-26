@@ -337,6 +337,28 @@ func TestCallBlockedWriteHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCallReturnsWhenWriterIgnoresTransportAbort(t *testing.T) {
+	writer := newUninterruptibleWriteCloser()
+	defer writer.releaseWrite()
+	p := newUnitProvider(writer, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := p.call(ctx, "uninterruptible", nil)
+		result <- err
+	}()
+	waitSignal(t, writer.started, "uninterruptible write")
+	cancel()
+	if err := waitError(t, result, "uninterruptible call"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("call error = %v, want context canceled", err)
+	}
+	if writer.closeCalls() != 1 {
+		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
+	}
+	writer.releaseWrite()
+	waitSignal(t, writer.returned, "uninterruptible writer cleanup")
+}
+
 func TestCanceledDispatchedCallSendsCancellation(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
@@ -908,6 +930,48 @@ func (w *closeBlockingWriteCloser) closeCalls() int {
 	return w.closes
 }
 
+type uninterruptibleWriteCloser struct {
+	started     chan struct{}
+	release     chan struct{}
+	returned    chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+	mu          sync.Mutex
+	closes      int
+}
+
+func newUninterruptibleWriteCloser() *uninterruptibleWriteCloser {
+	return &uninterruptibleWriteCloser{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		returned: make(chan struct{}),
+	}
+}
+
+func (w *uninterruptibleWriteCloser) Write([]byte) (int, error) {
+	w.startOnce.Do(func() { close(w.started) })
+	<-w.release
+	close(w.returned)
+	return 0, io.ErrClosedPipe
+}
+
+func (w *uninterruptibleWriteCloser) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closes++
+	return nil
+}
+
+func (w *uninterruptibleWriteCloser) releaseWrite() {
+	w.releaseOnce.Do(func() { close(w.release) })
+}
+
+func (w *uninterruptibleWriteCloser) closeCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closes
+}
+
 type partialErrorWriteCloser struct {
 	mu     sync.Mutex
 	limit  int
@@ -1003,6 +1067,7 @@ func (w *failingWriteCloser) Close() error              { return nil }
 
 var _ io.WriteCloser = (*recordingWriteCloser)(nil)
 var _ io.WriteCloser = (*closeBlockingWriteCloser)(nil)
+var _ io.WriteCloser = (*uninterruptibleWriteCloser)(nil)
 var _ io.WriteCloser = (*partialErrorWriteCloser)(nil)
 var _ io.WriteCloser = (*shortWriteCloser)(nil)
 var _ io.WriteCloser = (*failingWriteCloser)(nil)
