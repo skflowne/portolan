@@ -111,10 +111,12 @@ sequenceDiagram
 ```
 
 The `lsp.Provider` is concurrency-safe: one background reader goroutine demuxes responses by
-JSON-RPC id into per-request channels, writes are mutex-serialized, and every call is bounded by a
-timeout so the model is never left hanging. It also answers tsgo's server-initiated
-`client/registerCapability` request (which carries a *string* id) with `MethodNotFound` — otherwise
-tsgo stalls its whole request queue waiting for a reply.
+JSON-RPC id into per-request lifecycle entries that accept exactly one terminal response or error.
+Response delivery, timeout cleanup, connection failure, and explicit close share that owner, so late
+responses are ignored without closing a delivery channel. Writes and close admission are serialized,
+and every call is bounded by a timeout so the model is never left hanging. The provider also answers
+tsgo's server-initiated `client/registerCapability` request (which carries a *string* id) with
+`MethodNotFound` — otherwise tsgo stalls its whole request queue waiting for a reply.
 
 ---
 
