@@ -28,6 +28,14 @@ mechanism:
 Apply this proportionally; a local implementation detail needs no architecture report. Mention the
 search and ownership result at handoff when it affected the design.
 
+For a cross-package migration of a shared type, protocol shape, identity, or state representation,
+record a search-derived inventory of its producers, consumers, serializers, validators,
+default/fallback sites, identity or cache-key builders, and superseded helpers. Migrate every
+production occurrence or document why it is unaffected. Repeat the inventory against the final diff.
+When work is delegated, one integrator owns the shared contract, merged inventory, and end-to-end
+acceptance. Delegated slices do not independently redesign the seam or add local adapters to avoid
+it.
+
 ## Ownership and boundaries
 
 A domain decision or invariant has one owner. Duplication is a defect when two locations can
@@ -39,6 +47,10 @@ independently change the same behavior; similar local mechanics are not automati
   of the decision.
 - Shared helpers, fixtures, protocol adapters, and lifecycle mechanisms have one implementation.
   Extend that owner rather than creating a local fork.
+- Values crossing a process, protocol, or persistence boundary are decoded, validated, and
+  defaulted once by the owning package. Downstream code receives a valid domain value or an
+  explicit error; it does not reconstruct the value from primitives, assign semantic meaning to an
+  empty value, or maintain a local validator.
 - Existing violations are debt, not precedent. When touched, bring the concept under one owner.
 - Never bypass, inline, or delete a shared abstraction merely to close a bug or review finding.
   Repair or replace it and migrate all callers coherently.
@@ -79,6 +91,10 @@ changes architecture or long-term integration direction.
 - Freshness comes from `GenerationCounter.Current()`; tools do not construct `core.Freshness`.
 - A formula owns every bound of its decision; callers do not centralize one side and recreate the
   other.
+- Each cache or deduplication mechanism has one canonical identity builder used for lookup,
+  insertion, invalidation, and telemetry correlation. Its key includes every semantic discriminator;
+  changing it preserves or deliberately revises each documented normalization property and its
+  tests.
 
 Every tool call:
 
@@ -98,6 +114,10 @@ satisfy these rules through shared mechanisms rather than by copying an existing
 
 - Retries, in-flight tracking, ordering, shutdown sequencing, socket ownership, and rollback belong
   in a named, unit-testable owner, not flags scattered across handlers or server structs.
+- A mutable fact has one write path. Derived views and caches are not independent sources of truth;
+  changes flow through the owner's transition API. Enumerate the applicable creation, update,
+  reconnect or restart, recovery, invalidation, and shutdown transitions before changing that state.
+  Adding another synchronization writer is a signal to consolidate ownership instead.
 - When a fix would add another guard, flag, counter, fallback, or rollback branch to already complex
   state, consolidate the state and fix its owner in the same change.
 - When a stateful seam appears across more than two consecutive fix commits, refactor its ownership
@@ -106,6 +126,10 @@ satisfy these rules through shared mechanisms rather than by copying an existing
   external compatibility requirement demands it.
 - Do not add speculative compatibility shims, fallbacks, retries, or defensive branches without an
   evidenced caller or failure mode.
+- Tool calls, control handlers, LSP reader paths, filesystem watchers, telemetry emission, and
+  polling loops do not perform unbounded or serial per-item external work. A timeout bounds the
+  whole operation, not merely each item; subprocess, network, and disk work is batched, cached, or
+  concurrency-limited as appropriate and always honors cancellation.
 
 No non-test `.go` file may exceed 400 lines. Pre-existing oversized files may not grow; split their
 responsibilities in the same change when modifying behavior there. Do not evade the limit with

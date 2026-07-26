@@ -27,6 +27,9 @@ then stop. Specifically:
 - Anything with **shared mutable state or a lifecycle** spans two layers at once, under the
   one-end-to-end-home rule below. Do not try to prove a race through an end-to-end test, and do not
   let an owner-level race test stand in for the user-visible invariant.
+- When a value or invariant crosses packages, processes, or protocol boundaries, one integration or
+  end-to-end test follows it from its authoritative producer through a final consumer, including
+  the relevant live-state transition. Package-local mocks do not prove propagation completeness.
 
 Measurement suites never join the `go test ./...` gate. Tier A is the exception and is already a
 gate, because retrieval correctness is pass/fail on a pinned fixture.
@@ -57,9 +60,14 @@ Tests must:
 - keep one end-to-end home per user-visible or protocol invariant, with race interleavings and state
   transitions tested directly on their owner;
 - never weaken or delete an assertion merely to make output pass;
-- derive expected values independently of the production decision under test; and
+- derive expected values independently of the production decision under test;
+- use source-shape assertions only for exact architectural prohibitions that behavioral tests cannot
+  express cheaply; target a specific forbidden construct, import, or bounded count rather than a
+  broad substring-presence check; and
 - reuse `eval/testinfra` for process startup, readiness, cleanup, and environment setup.
 
+When changing an existing test, account for every removed case, assertion, platform path, and
+normalization property. Adapt the old regression contract before adding coverage for a new one.
 Organize tests by behavior and split files that have become collections of unrelated regressions.
 
 ## Eval gates
