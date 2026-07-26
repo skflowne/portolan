@@ -62,12 +62,17 @@ func TestTransportAbortArbitratesPendingAndRepeatedCleanup(t *testing.T) {
 	connection := provider.transport
 	var kills atomic.Int32
 	var waits atomic.Int32
+	waitStarted := make(chan struct{}, 1)
 	connection.killProcess = func() error {
 		kills.Add(1)
 		return nil
 	}
 	connection.waitProcess = func() error {
 		waits.Add(1)
+		select {
+		case waitStarted <- struct{}{}:
+		default:
+		}
 		return nil
 	}
 	request, err := connection.register("1")
@@ -79,6 +84,10 @@ func TestTransportAbortArbitratesPendingAndRepeatedCleanup(t *testing.T) {
 	if result := waitPendingResult(t, request); !errors.Is(result.err, cause) {
 		t.Fatalf("pending error = %v, want %v", result.err, cause)
 	}
+	if writer.closeCalls() != 1 || kills.Load() != 1 {
+		t.Fatalf("standalone abort cleanup: input=%d kill=%d, want 1 each", writer.closeCalls(), kills.Load())
+	}
+	waitSignal(t, waitStarted, "standalone abort process wait")
 
 	const callers = 8
 	var wg sync.WaitGroup
