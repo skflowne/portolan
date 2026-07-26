@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -72,9 +71,8 @@ func otlpEndpointConfigured() bool {
 		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
 }
 
-// defaultingLogger owns the immutable pre-fanout Event snapshot. Both JSONL
-// and OTEL therefore observe one timestamp and caller mutation after Log
-// returns cannot alter either sink's record.
+// defaultingLogger applies configured event defaults before the shared
+// snapshot owner dispatches the event to composed sinks.
 type defaultingLogger struct {
 	inner     core.Logger
 	sessionID string
@@ -88,39 +86,7 @@ func (d *defaultingLogger) Log(ctx context.Context, ev core.Event) {
 	if ev.GraphMode == "" {
 		ev.GraphMode = d.graphMode
 	}
-	if ev.Timestamp == "" {
-		ev.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
-	}
-	ev.Extra = snapshotExtra(ev.Extra)
-	d.inner.Log(ctx, ev)
-}
-
-func snapshotExtra(extra map[string]any) map[string]any {
-	if extra == nil {
-		return nil
-	}
-	snapshot := make(map[string]any, len(extra))
-	for key, value := range extra {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			// Keep the Event deliberately unencodable so JSONL's owner records and
-			// diagnoses its marshal fallback, but retain no mutable caller value.
-			snapshot[key] = unencodableSnapshot{Reason: err.Error(), Unsupported: func() {}}
-			continue
-		}
-		var detached any
-		if err := json.Unmarshal(encoded, &detached); err != nil {
-			snapshot[key] = unencodableSnapshot{Reason: err.Error(), Unsupported: func() {}}
-			continue
-		}
-		snapshot[key] = detached
-	}
-	return snapshot
-}
-
-type unencodableSnapshot struct {
-	Reason      string
-	Unsupported func()
+	dispatchSnapshot(ctx, d.inner, snapshotEvent(ev))
 }
 
 func (d *defaultingLogger) Close() error {

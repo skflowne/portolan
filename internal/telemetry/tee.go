@@ -34,8 +34,12 @@ func Tee(loggers ...core.Logger) core.Logger {
 }
 
 func (t *teeLogger) Log(ctx context.Context, ev core.Event) {
+	t.logSnapshot(ctx, snapshotEvent(ev))
+}
+
+func (t *teeLogger) logSnapshot(ctx context.Context, snapshot eventSnapshot) {
 	for _, logger := range t.loggers {
-		logger.Log(ctx, ev)
+		dispatchSnapshot(ctx, logger, snapshot)
 	}
 }
 

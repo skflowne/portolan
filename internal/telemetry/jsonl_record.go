@@ -4,15 +4,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"time"
 	"unicode/utf8"
 
 	"github.com/skflowne/portolan/internal/core"
 )
 
-func encodeJSONLRecord(ev core.Event, maxBytes int) (line []byte, oversize, fallback bool) {
-	if ev.Timestamp == "" {
-		ev.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+func encodeJSONLRecord(snapshot eventSnapshot, maxBytes int) (line []byte, oversize, fallback bool) {
+	ev := snapshot.event
+	failure, snapshotFailed := snapshot.extra.firstFailure()
+	if snapshotFailed {
+		fallback = true
+		ev.Extra = map[string]any{
+			"telemetry_encode_error": boundedString(failure, 256),
+		}
+	} else {
+		ev.Extra = snapshot.extra.values()
 	}
 	encoded, err := json.Marshal(ev)
 	if err != nil {
