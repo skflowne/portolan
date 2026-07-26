@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -107,7 +108,12 @@ func run() error {
 // precedence over environment variables, which take precedence over
 // defaults.
 func parseConfig(args []string) (core.Config, error) {
+	return parseConfigWithOutput(args, os.Stderr)
+}
+
+func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error) {
 	fs := flag.NewFlagSet("cgraphd", flag.ContinueOnError)
+	fs.SetOutput(output)
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -118,7 +124,7 @@ func parseConfig(args []string) (core.Config, error) {
 	jsonlPath := fs.String("jsonl", "", "path to write the telemetry JSONL stream to")
 	sessionID := fs.String("session-id", envOr("CGRAPH_SESSION_ID", ""), "session id tagging every telemetry event")
 	graphMode := fs.String("graph-mode", envOr("CGRAPH_GRAPH_MODE", "graph"), `eval axis: "graph" or "no-graph"`)
-	controlSocket := fs.String("control-socket", "", "control-socket path (default: project-keyed path under /tmp)")
+	controlSocket := fs.String("control-socket", "", "control-socket path (empty uses the project-keyed default)")
 	tsgoPath := fs.String("tsgo", "tsgo", "tsgo executable (resolved on PATH if not absolute)")
 	maxResults := fs.Int("max-results", 0, "cap applied to every list-returning tool result (0 = default)")
 

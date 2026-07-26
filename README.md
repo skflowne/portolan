@@ -10,7 +10,7 @@ are its properties, where is it used") by graph lookup instead of expensive text
 **Phase 0 complete** — walking skeleton: a Go daemon (`cgraphd`) with an MCP stdio server, three
 passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
 provider, deterministic daemon/control-socket lifecycle, JSONL telemetry, WSL↔Windows path
-handling, and a Tier A retrieval-correctness gate that drives the real daemon over MCP. 120 tests
+handling, and a Tier A retrieval-correctness gate that drives the real daemon over MCP. 125 tests
 across 10 packages. **Phase 1 (the staleness barrier) is next.**
 
 Docs:
