@@ -170,6 +170,13 @@ func RequireSupport(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("daemon eval tests require Unix sockets and signals")
 	}
+	probe := filepath.Join(t.TempDir(), "control-support.sock")
+	ln, err := net.Listen("unix", probe)
+	if err != nil {
+		t.Skipf("Unix sockets unavailable: %v", err)
+	}
+	_ = ln.Close()
+	_ = os.Remove(probe)
 }
 
 // Stderr returns all daemon diagnostics captured so far.

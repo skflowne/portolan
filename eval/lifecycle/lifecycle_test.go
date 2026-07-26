@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,21 +28,6 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	cleanup()
 	os.Exit(code)
-}
-
-func requireLifecycleSupport(t *testing.T) {
-	t.Helper()
-	testinfra.RequireSupport(t)
-	if _, err := exec.LookPath("tsgo"); err != nil {
-		t.Skip("tsgo not on PATH")
-	}
-	probe := filepath.Join(t.TempDir(), "probe.sock")
-	ln, err := net.Listen("unix", probe)
-	if err != nil {
-		t.Skipf("Unix sockets unavailable: %v", err)
-	}
-	_ = ln.Close()
-	_ = os.Remove(probe)
 }
 
 func newDaemon(t *testing.T, socket string) *testinfra.Daemon {
@@ -113,7 +97,6 @@ func shutdownViaStdin(t *testing.T, d *testinfra.Daemon) {
 }
 
 func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
-	requireLifecycleSupport(t)
 	socket := filepath.Join(t.TempDir(), "control.sock")
 	d, childPID := startDaemon(t, socket)
 	if got := controlCommand(t, socket, "sync file.ts"); got != "ok generation=1\n" {
@@ -132,7 +115,6 @@ func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
 }
 
 func TestSIGTERMWithIdleControlClient(t *testing.T) {
-	requireLifecycleSupport(t)
 	socket := filepath.Join(t.TempDir(), "control.sock")
 	d, childPID := startDaemon(t, socket)
 	idle := testinfra.AcceptedIdleConnection(t, socket)
@@ -154,7 +136,6 @@ func TestSIGTERMWithIdleControlClient(t *testing.T) {
 }
 
 func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
-	requireLifecycleSupport(t)
 	socket := filepath.Join(t.TempDir(), "control.sock")
 	first, _ := startDaemon(t, socket)
 	originalInfo, err := os.Lstat(socket)
@@ -195,7 +176,6 @@ func TestDuplicateLiveSocketStartupCannotStealOwnership(t *testing.T) {
 }
 
 func TestCleanupCannotRemoveReplacementSocket(t *testing.T) {
-	requireLifecycleSupport(t)
 	socket := filepath.Join(t.TempDir(), "control.sock")
 	d, _ := startDaemon(t, socket)
 	if err := os.Remove(socket); err != nil {
@@ -242,7 +222,7 @@ func TestCleanupCannotRemoveReplacementSocket(t *testing.T) {
 }
 
 func TestStaleSocketIsReclaimedSafely(t *testing.T) {
-	requireLifecycleSupport(t)
+	testinfra.RequireSupport(t)
 	socket := filepath.Join(t.TempDir(), "control.sock")
 	createStaleSocket(t, socket)
 	if _, err := os.Lstat(socket); err != nil {
@@ -258,7 +238,6 @@ func TestStaleSocketIsReclaimedSafely(t *testing.T) {
 }
 
 func TestNonSocketPathsAreNeverTreatedAsStale(t *testing.T) {
-	requireLifecycleSupport(t)
 	cases := []struct {
 		name string
 		make func(t *testing.T, path string) func(t *testing.T)
