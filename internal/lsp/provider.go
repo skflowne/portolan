@@ -323,64 +323,80 @@ func isJSONNull(raw json.RawMessage) bool {
 	return trimmed == "null"
 }
 
-func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
-	return runContextWork(ctx, func() ([]core.Symbol, error) {
-		if isJSONNull(raw) {
-			return nil, nil
-		}
-
-		var syms []lspDocumentSymbol
-		if err := json.Unmarshal(raw, &syms); err != nil {
-			return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
-		}
-		if len(syms) == 0 {
-			return nil, nil
-		}
-
-		out := make([]core.Symbol, 0, len(syms))
-		for _, s := range syms {
-			out = append(out, s.toCoreSymbol(file))
-		}
-		return out, nil
+func unmarshalContext(ctx context.Context, raw json.RawMessage, dst any) error {
+	_, err := runContextWork(ctx, func() (struct{}, error) {
+		return struct{}{}, json.Unmarshal(raw, dst)
 	})
+	return err
+}
+
+func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
+	if isJSONNull(raw) {
+		return nil, nil
+	}
+
+	var syms []lspDocumentSymbol
+	if err := unmarshalContext(ctx, raw, &syms); err != nil {
+		return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
+	}
+	if len(syms) == 0 {
+		return nil, nil
+	}
+
+	out := make([]core.Symbol, 0, len(syms))
+	for _, s := range syms {
+		symbol, err := s.toCoreSymbol(ctx, file)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, symbol)
+	}
+	return out, nil
 }
 
 // decodeLocations handles the three shapes textDocument/definition and
 // textDocument/references may return: null, Location | Location[], or
 // LocationLink[].
 func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location, error) {
-	return runContextWork(ctx, func() ([]core.Location, error) {
-		if isJSONNull(raw) {
-			return nil, nil
-		}
+	if isJSONNull(raw) {
+		return nil, nil
+	}
 
-		var list []rawLocation
-		if err := json.Unmarshal(raw, &list); err != nil {
-			var single rawLocation
-			if err2 := json.Unmarshal(raw, &single); err2 != nil {
-				return nil, fmt.Errorf("lsp: decoding location result: %w", err)
+	var list []rawLocation
+	if err := unmarshalContext(ctx, raw, &list); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var single rawLocation
+		if err2 := unmarshalContext(ctx, raw, &single); err2 != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
 			}
-			list = []rawLocation{single}
+			return nil, fmt.Errorf("lsp: decoding location result: %w", err)
 		}
-		if len(list) == 0 {
-			return nil, nil
-		}
+		list = []rawLocation{single}
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
 
-		out := make([]core.Location, 0, len(list))
-		for _, rl := range list {
-			loc, ok, err := rl.toLocation()
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				out = append(out, loc)
-			}
+	out := make([]core.Location, 0, len(list))
+	for _, rl := range list {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		if len(out) == 0 {
-			return nil, nil
+		loc, ok, err := rl.toLocation()
+		if err != nil {
+			return nil, err
 		}
-		return out, nil
-	})
+		if ok {
+			out = append(out, loc)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func (rl rawLocation) toLocation() (core.Location, bool, error) {
@@ -414,12 +430,19 @@ func (r lspRange) toCoreRange() core.Range {
 	}
 }
 
-func (s lspDocumentSymbol) toCoreSymbol(file string) core.Symbol {
+func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.Symbol, error) {
+	if err := ctx.Err(); err != nil {
+		return core.Symbol{}, err
+	}
 	var children []core.Symbol
 	if len(s.Children) > 0 {
 		children = make([]core.Symbol, 0, len(s.Children))
 		for _, c := range s.Children {
-			children = append(children, c.toCoreSymbol(file))
+			child, err := c.toCoreSymbol(ctx, file)
+			if err != nil {
+				return core.Symbol{}, err
+			}
+			children = append(children, child)
 		}
 	}
 	return core.Symbol{
@@ -430,5 +453,5 @@ func (s lspDocumentSymbol) toCoreSymbol(file string) core.Symbol {
 		SelRange: s.SelectionRange.toCoreRange(),
 		Detail:   s.Detail,
 		Children: children,
-	}
+	}, nil
 }
