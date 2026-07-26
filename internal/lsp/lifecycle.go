@@ -66,6 +66,12 @@ func (l *transportLifecycle) register(key string) (*pendingRequest, error) {
 	return r, nil
 }
 
+func (l *transportLifecycle) isOpen() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state == providerOpen
+}
+
 func (l *transportLifecycle) admitExternalWrite() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

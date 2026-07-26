@@ -119,7 +119,7 @@ func TestFirstOpensForDifferentFilesReadConcurrently(t *testing.T) {
 		close(release)
 	}
 	for range 2 {
-		if err := waitTestError(t, results, "different-file open"); err != nil {
+		if err := waitError(t, results, "different-file open"); err != nil {
 			t.Fatalf("open: %v", err)
 		}
 	}
@@ -152,7 +152,7 @@ func TestConcurrentSameFileOpenIsCanonical(t *testing.T) {
 	waitSignal(t, started, "same-file read")
 	close(release)
 	for range callers {
-		if err := waitTestError(t, results, "same-file open"); err != nil {
+		if err := waitError(t, results, "same-file open"); err != nil {
 			t.Fatalf("open: %v", err)
 		}
 	}
@@ -183,16 +183,124 @@ func TestCanceledSameFileWaiterDoesNotCancelOwner(t *testing.T) {
 	waiter := make(chan error, 1)
 	go func() { waiter <- p.ensureOpen(waiterCtx, "/repo/a.ts") }()
 	cancel()
-	if err := waitTestError(t, waiter, "same-file waiter"); !errors.Is(err, context.Canceled) {
+	if err := waitError(t, waiter, "same-file waiter"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waiter error = %v, want context canceled", err)
 	}
 	close(release)
-	if err := waitTestError(t, owner, "same-file owner"); err != nil {
+	if err := waitError(t, owner, "same-file owner"); err != nil {
 		t.Fatalf("owner open: %v", err)
 	}
 	if reads.Load() != 1 || len(writer.methods()) != 1 {
 		t.Fatalf("reads = %d methods = %v, want one canonical open", reads.Load(), writer.methods())
 	}
+}
+
+func TestLiveSameFileWaitersRetryCanceledOwner(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	ownerStarted := make(chan struct{})
+	ownerReadDone := make(chan struct{})
+	var reads atomic.Int32
+	p := newOpenUnitProvider(func(ctx context.Context, _ string) ([]byte, error) {
+		if reads.Add(1) == 1 {
+			close(ownerStarted)
+			<-ctx.Done()
+			close(ownerReadDone)
+			return nil, ctx.Err()
+		}
+		return []byte("fresh source"), nil
+	}, writer)
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	owner := make(chan error, 1)
+	go func() { owner <- p.ensureOpen(ownerCtx, "/repo/a.ts") }()
+	waitSignal(t, ownerStarted, "owner read")
+
+	const waiterCount = 2
+	waiters := make(chan error, waiterCount)
+	waiterContexts := make([]*observedWaitContext, waiterCount)
+	for i := range waiterCount {
+		waiterContexts[i] = newObservedWaitContext()
+		ctx := waiterContexts[i]
+		go func() { waiters <- p.ensureOpen(ctx, "/repo/a.ts") }()
+	}
+	for _, ctx := range waiterContexts {
+		waitSignal(t, ctx.waiting, "same-file transition wait")
+	}
+
+	cancelOwner()
+	if err := waitError(t, owner, "canceled open owner"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("owner error = %v, want context canceled", err)
+	}
+	for range waiterCount {
+		if err := waitError(t, waiters, "live same-file waiter"); err != nil {
+			t.Fatalf("waiter open: %v", err)
+		}
+	}
+	waitSignal(t, ownerReadDone, "canceled owner read cleanup")
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("read attempts = %d, want canceled owner plus one retry", got)
+	}
+	bodies := writer.messageBodies()
+	if len(bodies) != 1 {
+		t.Fatalf("written messages = %d, want one didOpen", len(bodies))
+	}
+	var notification struct {
+		Method string        `json:"method"`
+		Params didOpenParams `json:"params"`
+	}
+	if err := json.Unmarshal(bodies[0], &notification); err != nil {
+		t.Fatalf("decode didOpen: %v", err)
+	}
+	item := notification.Params.TextDocument
+	if notification.Method != "textDocument/didOpen" || item.URI != "file:///repo/a.ts" || item.Version != 1 || item.Text != "fresh source" {
+		t.Fatalf("didOpen notification = %+v", notification)
+	}
+}
+
+func TestSameFileWaitersDoNotRetryNonContextFailure(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	ownerStarted := make(chan struct{})
+	releaseOwner := make(chan struct{})
+	errRead := errors.New("read failed")
+	var reads atomic.Int32
+	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
+		if reads.Add(1) == 1 {
+			close(ownerStarted)
+			<-releaseOwner
+			return nil, errRead
+		}
+		return []byte("fresh source"), nil
+	}, writer)
+
+	owner := make(chan error, 1)
+	go func() { owner <- p.ensureOpen(context.Background(), "/repo/a.ts") }()
+	waitSignal(t, ownerStarted, "owner read")
+	waiterCtx := newObservedWaitContext()
+	waiter := make(chan error, 1)
+	go func() { waiter <- p.ensureOpen(waiterCtx, "/repo/a.ts") }()
+	waitSignal(t, waiterCtx.waiting, "same-file transition wait")
+	close(releaseOwner)
+
+	if err := waitError(t, owner, "failed open owner"); !errors.Is(err, errRead) {
+		t.Fatalf("owner error = %v, want %v", err, errRead)
+	}
+	if err := waitError(t, waiter, "failed open waiter"); !errors.Is(err, errRead) {
+		t.Fatalf("waiter error = %v, want %v", err, errRead)
+	}
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("read attempts = %d, want no automatic retry", got)
+	}
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("written methods = %v, want none", methods)
+	}
+
+	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
+		t.Fatalf("later independent retry: %v", err)
+	}
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("read attempts after independent retry = %d, want 2", got)
+	}
+	writer.waitForMethod(t, "textDocument/didOpen")
 }
 
 func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
@@ -213,7 +321,7 @@ func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
 	waitSignal(t, dispatched, "didOpen dispatch")
 	cancel()
 	close(releasePublication)
-	if err := waitTestError(t, result, "didOpen publication"); err != nil {
+	if err := waitError(t, result, "didOpen publication"); err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 	p.afterFrameDispatch = nil
@@ -259,22 +367,26 @@ func TestInitializeUsesDedicatedContextForRequestAndNotification(t *testing.T) {
 	}
 }
 
+type observedWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func newObservedWaitContext() *observedWaitContext {
+	return &observedWaitContext{Context: context.Background(), waiting: make(chan struct{})}
+}
+
+func (c *observedWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func waitSignal(t *testing.T, signal <-chan struct{}, operation string) {
 	t.Helper()
 	select {
 	case <-signal:
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", operation)
-	}
-}
-
-func waitTestError(t *testing.T, result <-chan error, operation string) error {
-	t.Helper()
-	select {
-	case err := <-result:
-		return err
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", operation)
-		return nil
 	}
 }

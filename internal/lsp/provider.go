@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -189,8 +190,9 @@ func (p *Provider) prepareOpen(ctx context.Context, file string) (absFile, uri s
 }
 
 type openTransition struct {
-	done chan struct{}
-	err  error
+	done      chan struct{}
+	err       error
+	retryable bool
 }
 
 type fileReadResult struct {
@@ -220,48 +222,66 @@ func (p *Provider) readFileContext(ctx context.Context, path string) ([]byte, er
 // ensureOpen elects one opener per file. External work happens outside
 // openMu, so first opens for unrelated files proceed independently.
 func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
-	p.openMu.Lock()
-	transition, exists := p.openFiles[absFile]
-	if !exists {
-		transition = &openTransition{done: make(chan struct{})}
-		p.openFiles[absFile] = transition
-	}
-	p.openMu.Unlock()
-
-	if exists {
-		select {
-		case <-transition.done:
-			return transition.err
-		case <-ctx.Done():
-			return ctx.Err()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-	}
 
+		p.openMu.Lock()
+		transition, exists := p.openFiles[absFile]
+		if !exists {
+			transition = &openTransition{done: make(chan struct{})}
+			p.openFiles[absFile] = transition
+		}
+		p.openMu.Unlock()
+
+		if exists {
+			select {
+			case <-transition.done:
+				if transition.retryable {
+					continue
+				}
+				return transition.err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		err, retryable := p.openFile(ctx, absFile)
+		p.openMu.Lock()
+		transition.err = err
+		transition.retryable = retryable
+		if err != nil {
+			delete(p.openFiles, absFile)
+		}
+		close(transition.done)
+		p.openMu.Unlock()
+		return err
+	}
+}
+
+func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
 	data, err := p.readFileContext(ctx, absFile)
-	if err == nil {
-		params := didOpenParams{
-			TextDocument: textDocumentItem{
-				URI:        uriFromPath(absFile),
-				LanguageID: languageIDForFile(absFile),
-				Version:    1,
-				Text:       string(data),
-			},
-		}
-		if notifyErr := p.notify(ctx, "textDocument/didOpen", params); notifyErr != nil {
-			err = fmt.Errorf("lsp: didOpen %s: %w", absFile, notifyErr)
-		}
-	} else {
-		err = fmt.Errorf("lsp: reading %s: %w", absFile, err)
-	}
-
-	p.openMu.Lock()
-	transition.err = err
 	if err != nil {
-		delete(p.openFiles, absFile)
+		return fmt.Errorf("lsp: reading %s: %w", absFile, err), p.retryableOpenError(ctx, err)
 	}
-	close(transition.done)
-	p.openMu.Unlock()
-	return err
+	params := didOpenParams{
+		TextDocument: textDocumentItem{
+			URI:        uriFromPath(absFile),
+			LanguageID: languageIDForFile(absFile),
+			Version:    1,
+			Text:       string(data),
+		},
+	}
+	if err := p.notify(ctx, "textDocument/didOpen", params); err != nil {
+		return fmt.Errorf("lsp: didOpen %s: %w", absFile, err), p.retryableOpenError(ctx, err)
+	}
+	return nil, false
+}
+
+func (p *Provider) retryableOpenError(ctx context.Context, err error) bool {
+	ctxErr := ctx.Err()
+	return ctxErr != nil && errors.Is(err, ctxErr) && p.lifecycle.isOpen()
 }
 
 // Definition implements core.LanguageProvider.
