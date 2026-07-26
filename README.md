@@ -14,9 +14,9 @@ of how places reach each other, rather than a picture of the terrain.)
 
 **Phase 0 complete** — walking skeleton: a Go daemon (`portoland`) with an MCP stdio server, three
 passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
-provider, deterministic daemon/control-socket lifecycle, JSONL telemetry, WSL↔Windows path
-handling, and a Tier A retrieval-correctness gate that drives the real daemon over MCP. **Phase 1
-(the staleness barrier) is next.**
+provider, deterministic daemon/control-socket/LSP cancellation lifecycle, JSONL telemetry,
+WSL↔Windows path handling, and a Tier A retrieval-correctness gate that drives the real daemon over
+MCP. The repository has **92 automated tests**. **Phase 1 (the staleness barrier) is next.**
 
 Docs:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **visual architecture** (Mermaid diagrams): components, request flow, the staleness barrier, package graph, phase roadmap.
