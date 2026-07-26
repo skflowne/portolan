@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -100,40 +101,28 @@ func snapshotExtra(extra map[string]any) map[string]any {
 	if extra == nil {
 		return nil
 	}
-	return snapshotMap(extra, 0)
+	snapshot := make(map[string]any, len(extra))
+	for key, value := range extra {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			// Keep the Event deliberately unencodable so JSONL's owner records and
+			// diagnoses its marshal fallback, but retain no mutable caller value.
+			snapshot[key] = unencodableSnapshot{Reason: err.Error(), Unsupported: func() {}}
+			continue
+		}
+		var detached any
+		if err := json.Unmarshal(encoded, &detached); err != nil {
+			snapshot[key] = unencodableSnapshot{Reason: err.Error(), Unsupported: func() {}}
+			continue
+		}
+		snapshot[key] = detached
+	}
+	return snapshot
 }
 
-func snapshotMap(input map[string]any, depth int) map[string]any {
-	if depth >= 32 {
-		return input
-	}
-	output := make(map[string]any, len(input))
-	for key, value := range input {
-		output[key] = snapshotValue(value, depth+1)
-	}
-	return output
-}
-
-func snapshotValue(value any, depth int) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return snapshotMap(typed, depth)
-	case []any:
-		if depth >= 32 {
-			return typed
-		}
-		output := make([]any, len(typed))
-		for i := range typed {
-			output[i] = snapshotValue(typed[i], depth+1)
-		}
-		return output
-	case []string:
-		return append([]string(nil), typed...)
-	default:
-		// Preserve unsupported values so JSONL can account for and diagnose its
-		// marshal fallback instead of silently sanitizing the production Event.
-		return typed
-	}
+type unencodableSnapshot struct {
+	Reason      string
+	Unsupported func()
 }
 
 func (d *defaultingLogger) Close() error {
