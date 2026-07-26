@@ -89,6 +89,7 @@ sequenceDiagram
     participant S as MCP server
     participant T as Tools layer
     participant P as lsp.Provider
+    participant X as Provider-owned transport<br/>(write gate · lifecycle · reader)
     participant G as tsgo LSP
     participant L as JSONL log
 
@@ -99,15 +100,20 @@ sequenceDiagram
     T->>P: DocumentSymbols(file, operation context)
     opt first query for this file
         P->>P: read file under per-file open transition
-        P->>G: textDocument/didOpen
+        P->>X: dispatch textDocument/didOpen
+        X->>G: textDocument/didOpen
     end
-    P->>G: textDocument/documentSymbol
-    G-->>P: symbol tree
+    P->>X: register + dispatch textDocument/documentSymbol
+    X->>G: textDocument/documentSymbol
+    G-->>X: symbol tree
+    X-->>P: demultiplexed response
     P-->>T: []Symbol
     T->>T: resolve name → Position (SelRange.Start)
     T->>P: Definition(file, pos, same operation context)
-    P->>G: textDocument/definition
-    G-->>P: Location[]
+    P->>X: register + dispatch textDocument/definition
+    X->>G: textDocument/definition
+    G-->>X: Location[]
+    X-->>P: demultiplexed response
     P-->>T: []core.Location
     T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
     T->>L: emit exactly one Event (tool, duration, size, …)
