@@ -195,7 +195,6 @@ func (p *Provider) writeFrameLocked(ctx context.Context, data []byte) (bool, err
 			return true, nil
 		}
 		p.abortTransport(ctx.Err())
-		<-result
 		return false, ctx.Err()
 	}
 }
