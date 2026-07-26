@@ -323,13 +323,6 @@ func isJSONNull(raw json.RawMessage) bool {
 	return trimmed == "null"
 }
 
-func unmarshalContext(ctx context.Context, raw json.RawMessage, dst any) error {
-	_, err := runContextWork(ctx, func() (struct{}, error) {
-		return struct{}{}, json.Unmarshal(raw, dst)
-	})
-	return err
-}
-
 func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -337,27 +330,28 @@ func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string
 	if isJSONNull(raw) {
 		return nil, nil
 	}
+	return runContextWork(ctx, func() ([]core.Symbol, error) {
+		var syms []lspDocumentSymbol
+		if err := json.Unmarshal(raw, &syms); err != nil {
+			return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
+		}
+		if len(syms) == 0 {
+			return nil, nil
+		}
 
-	var syms []lspDocumentSymbol
-	if err := unmarshalContext(ctx, raw, &syms); err != nil {
-		return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
-	}
-	if len(syms) == 0 {
-		return nil, nil
-	}
-
-	out := make([]core.Symbol, 0, len(syms))
-	for _, s := range syms {
-		symbol, err := s.toCoreSymbol(ctx, file)
-		if err != nil {
+		out := make([]core.Symbol, 0, len(syms))
+		for _, s := range syms {
+			symbol, err := s.toCoreSymbol(ctx, file)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, symbol)
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		out = append(out, symbol)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+		return out, nil
+	})
 }
 
 // decodeLocations handles the three shapes textDocument/definition and
@@ -370,50 +364,43 @@ func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location,
 	if isJSONNull(raw) {
 		return nil, nil
 	}
-
-	var list []rawLocation
-	if err := unmarshalContext(ctx, raw, &list); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		var single rawLocation
-		if err2 := unmarshalContext(ctx, raw, &single); err2 != nil {
+	return runContextWork(ctx, func() ([]core.Location, error) {
+		var list []rawLocation
+		if err := json.Unmarshal(raw, &list); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			return nil, fmt.Errorf("lsp: decoding location result: %w", err)
+			var single rawLocation
+			if err2 := json.Unmarshal(raw, &single); err2 != nil {
+				return nil, fmt.Errorf("lsp: decoding location result: %w", err)
+			}
+			list = []rawLocation{single}
 		}
-		list = []rawLocation{single}
-	}
-	if len(list) == 0 {
-		return nil, nil
-	}
+		if len(list) == 0 {
+			return nil, nil
+		}
 
-	out := make([]core.Location, 0, len(list))
-	for _, rl := range list {
-		converted, err := runContextWork(ctx, func() (locationResult, error) {
+		out := make([]core.Location, 0, len(list))
+		for _, rl := range list {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			loc, ok, err := rl.toLocation()
-			return locationResult{location: loc, ok: ok}, err
-		})
-		if err != nil {
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out = append(out, loc)
+			}
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if converted.ok {
-			out = append(out, converted.location)
+		if len(out) == 0 {
+			return nil, nil
 		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
-}
-
-type locationResult struct {
-	location core.Location
-	ok       bool
+		return out, nil
+	})
 }
 
 func (rl rawLocation) toLocation() (core.Location, bool, error) {

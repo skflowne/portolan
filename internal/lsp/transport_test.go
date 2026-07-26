@@ -283,7 +283,7 @@ func TestResponseConversionsHonorContext(t *testing.T) {
 		}
 	})
 	t.Run("locations", func(t *testing.T) {
-		ctx := newCancelOnErrCheckContext(6)
+		ctx := newCancelOnErrCheckContext(4)
 		raw := json.RawMessage(`[
 			{"uri":"file:///repo/a.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
 			{"uri":"file:///repo/b.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}
@@ -293,7 +293,7 @@ func TestResponseConversionsHonorContext(t *testing.T) {
 		}
 	})
 	t.Run("document_symbols", func(t *testing.T) {
-		ctx := newCancelOnErrCheckContext(5)
+		ctx := newCancelOnErrCheckContext(4)
 		raw := json.RawMessage(`[
 			{"name":"A","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
 			{"name":"B","kind":12,"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"selectionRange":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}}
