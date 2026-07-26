@@ -1,13 +1,13 @@
 package mcp
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,34 +192,93 @@ func TestRestorePathNoReplacePreservesNewerPath(t *testing.T) {
 }
 
 func TestControlSocket_UnauthorizedPeerCannotSync(t *testing.T) {
+	tests := []struct {
+		name             string
+		closeBeforeWrite bool
+	}{
+		{name: "write before authorization close"},
+		{name: "authorization close before write", closeBeforeWrite: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn, gen, deny := dialDeniedControlPeer(t)
+			command := []byte("sync forbidden.ts\n")
+
+			if test.closeBeforeWrite {
+				deny()
+				requireClosedWithoutResponse(t, conn)
+				_, _ = conn.Write(command)
+			} else {
+				if _, err := conn.Write(command); err != nil {
+					t.Fatalf("write before authorization close: %v", err)
+				}
+				deny()
+			}
+
+			requireClosedWithoutResponse(t, conn)
+			if got := gen.Current().Generation; got != 0 {
+				t.Fatalf("unauthorized sync bumped generation to %d", got)
+			}
+		})
+	}
+}
+
+func dialDeniedControlPeer(t *testing.T) (net.Conn, *core.GenerationCounter, func()) {
+	t.Helper()
+
+	authorizationEntered := make(chan struct{})
+	denyAuthorization := make(chan struct{})
+	var denyOnce sync.Once
+	deny := func() { denyOnce.Do(func() { close(denyAuthorization) }) }
+
 	sockPath := filepath.Join(t.TempDir(), "control.sock")
 	gen := &core.GenerationCounter{}
 	cs := NewControlSocket(sockPath, gen)
-	cs.authorize = func(net.Conn) error { return errors.New("denied by test") }
+	cs.authorize = func(net.Conn) error {
+		close(authorizationEntered)
+		<-denyAuthorization
+		return errors.New("denied by test")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := cs.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		cancel()
 		cs.Wait()
-	}()
+	})
+	t.Cleanup(deny)
 
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
-	if _, err := conn.Write([]byte("sync forbidden.ts\n")); err != nil {
-		t.Fatalf("write: %v", err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-authorizationEntered:
+	case <-time.After(time.Second):
+		t.Fatal("authorization did not start")
 	}
+	return conn, gen, deny
+}
+
+func requireClosedWithoutResponse(t *testing.T, conn net.Conn) {
+	t.Helper()
+
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
-	if reply, err := bufio.NewReader(conn).ReadString('\n'); err == nil {
-		t.Fatalf("unauthorized peer received reply %q", reply)
+	buf := make([]byte, 128)
+	n, err := conn.Read(buf)
+	if n != 0 {
+		t.Fatalf("unauthorized peer received response %q", buf[:n])
 	}
-	if got := gen.Current().Generation; got != 0 {
-		t.Fatalf("unauthorized sync bumped generation to %d", got)
+	if err == nil {
+		t.Fatal("unauthorized connection remained open without a response")
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		t.Fatal("unauthorized connection was not closed")
 	}
 }
