@@ -99,6 +99,17 @@ func waitFor(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
+func waitForCondition(t *testing.T, condition func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func logEvent(logger *JSONLLogger, ctx context.Context, id string) {
 	logger.Log(ctx, core.Event{SessionID: "session", GraphMode: "graph", Tool: id})
 }
@@ -365,9 +376,7 @@ func TestJSONLWriteBehaviorAndPermanentFailure(t *testing.T) {
 			requireReturned(t, firstDone, "first Log")
 			logEvent(logger, context.Background(), "accepted-before-failure")
 			close(sink.writeGate)
-			for !logger.failed.Load() {
-				time.Sleep(time.Millisecond)
-			}
+			waitForCondition(t, logger.failed.Load, "sink failure latch")
 			logEvent(logger, context.Background(), "dropped-after-failure")
 			if err := logger.Close(); !errors.Is(err, root) {
 				t.Fatalf("Close error = %v, want root error", err)
@@ -513,7 +522,11 @@ func TestJSONLCloseTimeoutIsBoundedStableAndInterruptsSink(t *testing.T) {
 func TestJSONLCloseDeadlineIncludesStalledSinkClose(t *testing.T) {
 	sink := &controlledSink{closeStarted: make(chan struct{}), closeGate: make(chan struct{})}
 	logger := testJSONL(sink, func(opts *jsonlOptions) { opts.shutdownTimeout = 30 * time.Millisecond })
-	defer close(sink.closeGate)
+	defer func() {
+		close(sink.closeGate)
+		waitFor(t, logger.sinkCloseDone, "released sink Close")
+		waitFor(t, logger.workerDone, "released JSONL worker")
+	}()
 
 	done := make(chan error, 1)
 	go func() { done <- logger.Close() }()
@@ -538,7 +551,11 @@ func TestJSONLCloseInterruptsAdmissionWait(t *testing.T) {
 		opts.shutdownTimeout = 50 * time.Millisecond
 		opts.admissionWait = func() { waitOnce.Do(func() { close(waitStarted) }) }
 	})
-	defer close(writeGate)
+	defer func() {
+		close(writeGate)
+		waitFor(t, logger.sinkCloseDone, "admission-timeout sink close")
+		waitFor(t, logger.workerDone, "admission-timeout JSONL worker")
+	}()
 	firstDone := logEventAsync(logger, context.Background(), "first")
 	waitFor(t, sink.writeStarted, "first write")
 	requireReturned(t, firstDone, "first Log")
@@ -597,7 +614,7 @@ func TestJSONLDiagnosticCallbackCanReenterStats(t *testing.T) {
 	logger = testJSONL(sink, func(opts *jsonlOptions) {
 		opts.maxRecordBytes = 1024
 		opts.diagnostic = func(error) {
-			_ = logger.Stats()
+			logger.Log(context.Background(), core.Event{Tool: "reentrant"})
 			select {
 			case <-called:
 			default:
