@@ -191,7 +191,7 @@ func (p *Provider) close() error {
 	id := p.nextID.Add(1)
 	key := strconv.FormatInt(id, 10)
 	shutdownMessage := rpcRequest{JSONRPC: "2.0", ID: id, Method: "shutdown", Params: nil}
-	data, marshalErr := marshalMessage(shutdownMessage)
+	data, marshalErr := marshalMessage(ctx, shutdownMessage)
 
 	var shutdown *pendingRequest
 	var started bool

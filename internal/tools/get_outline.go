@@ -64,6 +64,9 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 
 	file := t.normFile(in.File)
 	symbols, err := t.Provider.DocumentSymbols(ctx, file)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		out.Error = err.Error()
 		out.Message = fmt.Sprintf("failed to load symbols for %s", file)
@@ -76,12 +79,12 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 		return out, nil
 	}
 
-	flat := flattenSymbols(symbols, 0)
-
-	truncated := false
-	if cap := t.Cfg.Cap(); len(flat) > cap {
-		flat = flat[:cap]
-		truncated = true
+	flat, truncated, err := flattenSymbols(ctx, symbols, t.Cfg.Cap())
+	if err != nil {
+		out.Error = err.Error()
+		out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
+		t.emit(ctx, &ev, start, 0, false, err.Error())
+		return out, nil
 	}
 
 	out.Found = true
@@ -91,13 +94,22 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 	return out, nil
 }
 
-// flattenSymbols walks symbols depth-first, emitting each node immediately
-// before its children, tagging each with its nesting Depth.
-func flattenSymbols(symbols []core.Symbol, depth int) []OutlineSymbol {
-	var out []OutlineSymbol
-	var walk func([]core.Symbol, int)
-	walk = func(syms []core.Symbol, d int) {
+// flattenSymbols walks symbols depth-first and stops once it can prove the
+// configured result cap is truncated.
+func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) ([]OutlineSymbol, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	out := make([]OutlineSymbol, 0, min(len(symbols), cap))
+	var walk func([]core.Symbol, int) (bool, error)
+	walk = func(syms []core.Symbol, depth int) (bool, error) {
 		for _, s := range syms {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			if len(out) == cap {
+				return true, nil
+			}
 			out = append(out, OutlineSymbol{
 				Name:      s.Name,
 				Kind:      s.Kind,
@@ -106,13 +118,20 @@ func flattenSymbols(symbols []core.Symbol, depth int) []OutlineSymbol {
 				SelRange:  s.SelRange,
 				Signature: s.Signature,
 				Detail:    s.Detail,
-				Depth:     d,
+				Depth:     depth,
 			})
 			if len(s.Children) > 0 {
-				walk(s.Children, d+1)
+				truncated, err := walk(s.Children, depth+1)
+				if err != nil || truncated {
+					return truncated, err
+				}
 			}
 		}
+		return false, nil
 	}
-	walk(symbols, depth)
-	return out
+	truncated, err := walk(symbols, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
 }
