@@ -87,10 +87,12 @@ func TestTransportCloseTransitionOwnsPendingAndWriteAdmission(t *testing.T) {
 
 type closeWindowWriter struct {
 	*recordingWriteCloser
-	closed       atomic.Bool
-	closeStarted chan struct{}
-	releaseClose chan struct{}
-	writes       atomic.Int32
+	closed          atomic.Bool
+	closeStarted    chan struct{}
+	releaseClose    chan struct{}
+	writeAfterClose chan struct{}
+	writeSignalOnce sync.Once
+	writes          atomic.Int32
 }
 
 func newCloseWindowWriter() *closeWindowWriter {
@@ -98,12 +100,14 @@ func newCloseWindowWriter() *closeWindowWriter {
 		recordingWriteCloser: newRecordingWriteCloser(),
 		closeStarted:         make(chan struct{}),
 		releaseClose:         make(chan struct{}),
+		writeAfterClose:      make(chan struct{}),
 	}
 }
 
 func (w *closeWindowWriter) Write(data []byte) (int, error) {
 	w.writes.Add(1)
 	if w.closed.Load() {
+		w.writeSignalOnce.Do(func() { close(w.writeAfterClose) })
 		return 0, io.ErrClosedPipe
 	}
 	return w.recordingWriteCloser.Write(data)
@@ -116,6 +120,11 @@ func (w *closeWindowWriter) Close() error {
 	return w.recordingWriteCloser.Close()
 }
 
+type transportWriteResult struct {
+	dispatched bool
+	err        error
+}
+
 type signalingJSONMarshaler struct {
 	marshaled chan struct{}
 }
@@ -123,6 +132,57 @@ type signalingJSONMarshaler struct {
 func (m signalingJSONMarshaler) MarshalJSON() ([]byte, error) {
 	close(m.marshaled)
 	return []byte(`{"jsonrpc":"2.0","id":"server-1","error":{"code":-32601,"message":"method not found"}}`), nil
+}
+
+func TestTransportInputClosureEndsWriteAdmission(t *testing.T) {
+	writer := newCloseWindowWriter()
+	connection := newUnitProvider(writer, nil).transport
+	if _, started := connection.beginClose("1"); !started {
+		t.Fatal("close transition did not start")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- connection.closeInput() }()
+	waitSignal(t, writer.closeStarted, "input close start")
+
+	responseResult := make(chan transportWriteResult, 1)
+	go func() {
+		dispatched, err := connection.writeMessage(context.Background(), writeServerResponse, rpcErrorResponse{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`"server-1"`),
+			Error:   rpcError{Code: -32601, Message: "method not found"},
+		})
+		responseResult <- transportWriteResult{dispatched: dispatched, err: err}
+	}()
+
+	var response transportWriteResult
+	select {
+	case response = <-responseResult:
+	case <-writer.writeAfterClose:
+		close(writer.releaseClose)
+		<-closeResult
+		response = <-responseResult
+		t.Fatalf("server response reached closed input: (%v, %v)", response.dispatched, response.err)
+	case <-time.After(time.Second):
+		close(writer.releaseClose)
+		<-closeResult
+		t.Fatal("server response admission did not complete")
+	}
+	if response.dispatched || !errors.Is(response.err, errProviderClosed) {
+		t.Fatalf("server response after input close = (%v, %v), want rejected/provider closed", response.dispatched, response.err)
+	}
+	close(writer.releaseClose)
+	if err := <-closeResult; err != nil {
+		t.Fatalf("close input: %v", err)
+	}
+	if got := writer.writes.Load(); got != 0 {
+		t.Fatalf("frame write attempts = %d, want 0", got)
+	}
+	state, cause := transportStateAndCause(connection)
+	if state != transportClosing || !errors.Is(cause, errProviderClosed) {
+		t.Fatalf("transport after input close = (%v, %v), want closing/provider closed", state, cause)
+	}
+	connection.finishClose()
 }
 
 func TestTransportRejectsServerResponseAfterInputCloseBegins(t *testing.T) {
@@ -154,14 +214,10 @@ func TestTransportRejectsServerResponseAfterInputCloseBegins(t *testing.T) {
 	}
 
 	message := signalingJSONMarshaler{marshaled: make(chan struct{})}
-	type writeResult struct {
-		dispatched bool
-		err        error
-	}
-	responseResult := make(chan writeResult, 1)
+	responseResult := make(chan transportWriteResult, 1)
 	go func() {
 		dispatched, err := connection.writeMessage(context.Background(), writeServerResponse, message)
-		responseResult <- writeResult{dispatched: dispatched, err: err}
+		responseResult <- transportWriteResult{dispatched: dispatched, err: err}
 	}()
 	waitSignal(t, message.marshaled, "server response marshal")
 	close(writer.releaseClose)
