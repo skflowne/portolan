@@ -192,7 +192,12 @@ const (
 )
 
 func (p *Provider) writeFrameLocked(ctx context.Context, data []byte) (bool, error) {
-	frame := frameBytes(data)
+	frame, err := runContextWork(ctx, func() ([]byte, error) {
+		return frameBytes(data), nil
+	})
+	if err != nil {
+		return false, err
+	}
 	result := make(chan frameWriteResult, 1)
 	var state atomic.Uint32
 	go func() {

@@ -304,6 +304,20 @@ func TestResponseConversionsHonorContext(t *testing.T) {
 	})
 }
 
+func TestFramePreparationCancellationDoesNotWrite(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	ctx := newCancelOnErrCheckContext(2)
+
+	dispatched, err := p.writeFrameLocked(ctx, []byte(`{"jsonrpc":"2.0","method":"prepared"}`))
+	if !errors.Is(err, context.Canceled) || dispatched {
+		t.Fatalf("writeFrameLocked = (%v, %v), want not dispatched and context canceled", dispatched, err)
+	}
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("written methods = %v, want none", methods)
+	}
+}
+
 func TestCanceledSerializationDoesNotReachTransport(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	p := newUnitProvider(writer, nil)
