@@ -125,9 +125,10 @@ JSON-RPC id into per-request lifecycle entries that accept exactly one terminal 
 Response delivery, cancellation cleanup, connection failure, and explicit close share that owner,
 so late responses are ignored. Per-file open transitions retain one canonical `didOpen` while
 allowing unrelated files to read concurrently. A context-aware write gate serializes complete frames;
-cancellation before dispatch writes nothing, cancellation after dispatch removes the pending request
-and sends `$/cancelRequest`, and cancellation during a blocked or partial frame closes the pipe and
-kills the now-unusable subprocess. Server-initiated requests such as `client/registerCapability`
+cancellation before dispatch writes nothing, cancellation that wins after dispatch removes the
+pending request and schedules a bounded best-effort `$/cancelRequest` (dropped if its write gate
+budget expires), and cancellation during a blocked or partial frame closes the pipe and kills the
+now-unusable subprocess. Server-initiated requests such as `client/registerCapability`
 are answered asynchronously within a bounded internal-write budget, so they cannot stall response
 demultiplexing.
 
