@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func transportStateAndCause(t *transport) (transportState, error) {
@@ -98,11 +99,47 @@ func TestTransportAbortArbitratesPendingAndRepeatedCleanup(t *testing.T) {
 	if state != transportAborted || !errors.Is(terminalCause, cause) {
 		t.Fatalf("terminal transport = (%v, %v), want aborted/%v", state, terminalCause, cause)
 	}
+	for _, policy := range []writePolicy{writeExternal, writeServerResponse, writeExit} {
+		if err := connection.admitWrite(policy); !errors.Is(err, cause) {
+			t.Fatalf("write policy %v after abort = %v, want %v", policy, err, cause)
+		}
+	}
 	if writer.closeCalls() != 1 || kills.Load() != 1 || waits.Load() != 1 {
 		t.Fatalf("cleanup calls: input=%d kill=%d wait=%d, want 1 each", writer.closeCalls(), kills.Load(), waits.Load())
 	}
 	if methods := writer.methods(); len(methods) != 0 {
 		t.Fatalf("protocol methods after abort = %v, want none", methods)
+	}
+}
+
+func TestTransportReaderFailureDuringCloseReleasesShutdown(t *testing.T) {
+	connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+	shutdown, started := connection.beginClose("1")
+	if !started {
+		t.Fatal("close transition did not start")
+	}
+	cause := errors.New("reader failed")
+	connection.readerFailed(cause)
+	if result := waitPendingResult(t, shutdown); !errors.Is(result.err, cause) {
+		t.Fatalf("shutdown error = %v, want %v", result.err, cause)
+	}
+	state, _ := transportStateAndCause(connection)
+	if state != transportClosing {
+		t.Fatalf("transport state = %v, want closing until process cleanup", state)
+	}
+	if err := connection.admitWrite(writeExternal); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("external admission after reader failure = %v, want provider closed", err)
+	}
+	if err := connection.admitWrite(writeServerResponse); err != nil {
+		t.Fatalf("server response admission while closing: %v", err)
+	}
+	if err := connection.admitWrite(writeExit); err != nil {
+		t.Fatalf("exit admission while closing: %v", err)
+	}
+	connection.finishClose()
+	state, terminalCause := transportStateAndCause(connection)
+	if state != transportClosed || !errors.Is(terminalCause, errProviderClosed) {
+		t.Fatalf("terminal transport = (%v, %v), want closed/provider closed", state, terminalCause)
 	}
 }
 
@@ -122,4 +159,83 @@ func TestTransportAbortDuringCloseReleasesShutdownWithAbortCause(t *testing.T) {
 	if state != transportAborted || !errors.Is(terminalCause, cause) {
 		t.Fatalf("terminal transport = (%v, %v), want aborted/%v", state, terminalCause, cause)
 	}
+}
+
+func TestTransportProcessReapingBranches(t *testing.T) {
+	t.Run("graceful exit avoids kill", func(t *testing.T) {
+		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+		var waits atomic.Int32
+		var kills atomic.Int32
+		connection.waitProcess = func() error {
+			waits.Add(1)
+			return nil
+		}
+		connection.killProcess = func() error {
+			kills.Add(1)
+			return nil
+		}
+
+		connection.waitForProcess(time.Second)
+		connection.waitForProcess(time.Second)
+		if waits.Load() != 1 || kills.Load() != 0 {
+			t.Fatalf("process calls: wait=%d kill=%d, want 1/0", waits.Load(), kills.Load())
+		}
+	})
+
+	t.Run("failed kill and blocked wait stay bounded", func(t *testing.T) {
+		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+		releaseWait := make(chan struct{})
+		defer close(releaseWait)
+		var waits atomic.Int32
+		var kills atomic.Int32
+		connection.waitProcess = func() error {
+			waits.Add(1)
+			<-releaseWait
+			return nil
+		}
+		connection.killProcess = func() error {
+			kills.Add(1)
+			return errors.New("kill failed")
+		}
+		connection.killWait = time.Millisecond
+
+		finished := make(chan struct{})
+		go func() {
+			connection.waitForProcess(time.Millisecond)
+			connection.waitForProcess(time.Millisecond)
+			close(finished)
+		}()
+		waitSignal(t, finished, "bounded failed-kill process waits")
+		if waits.Load() != 1 || kills.Load() != 1 {
+			t.Fatalf("process calls: wait=%d kill=%d, want 1/1", waits.Load(), kills.Load())
+		}
+	})
+
+	t.Run("setup abort kills and reaps", func(t *testing.T) {
+		writer := newRecordingWriteCloser()
+		connection := newUnitProvider(writer, nil).transport
+		releaseWait := make(chan struct{})
+		var waits atomic.Int32
+		var kills atomic.Int32
+		connection.waitProcess = func() error {
+			waits.Add(1)
+			<-releaseWait
+			return nil
+		}
+		connection.killProcess = func() error {
+			kills.Add(1)
+			close(releaseWait)
+			return nil
+		}
+
+		cause := errors.New("setup failed")
+		connection.abortAndWait(cause)
+		state, terminalCause := transportStateAndCause(connection)
+		if state != transportAborted || !errors.Is(terminalCause, cause) {
+			t.Fatalf("terminal transport = (%v, %v), want aborted/%v", state, terminalCause, cause)
+		}
+		if writer.closeCalls() != 1 || waits.Load() != 1 || kills.Load() != 1 {
+			t.Fatalf("cleanup calls: input=%d wait=%d kill=%d, want 1 each", writer.closeCalls(), waits.Load(), kills.Load())
+		}
+	})
 }
