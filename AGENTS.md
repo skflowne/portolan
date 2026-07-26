@@ -21,6 +21,8 @@ Read [`ENGINEERING.md`](./ENGINEERING.md) before adding or relocating a package,
 
 ## Verification
 
+Assume an independent reviewer will verify every change and completion claim against the request, these rules, the final diff, and actual command output. Rule violations, skipped validation, and unsupported claims will be rejected.
+
 Run and report the full gate:
 
 ```bash
