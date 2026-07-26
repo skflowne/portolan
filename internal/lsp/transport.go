@@ -50,6 +50,23 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 	return buf, nil
 }
 
+func newWriteGate() chan struct{} {
+	return make(chan struct{}, 1)
+}
+
+func (p *Provider) lockWrite(ctx context.Context) error {
+	select {
+	case p.writeGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *Provider) unlockWrite() {
+	<-p.writeGate
+}
+
 func marshalMessage(v any) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -65,8 +82,10 @@ func (p *Provider) writeMessage(v any) error {
 	if err != nil {
 		return err
 	}
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
+	if err := p.lockWrite(context.Background()); err != nil {
+		return err
+	}
+	defer p.unlockWrite()
 	if err := p.lifecycle.admitExternalWrite(); err != nil {
 		return err
 	}
@@ -78,8 +97,10 @@ func (p *Provider) writeInternalMessage(v any) error {
 	if err != nil {
 		return err
 	}
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
+	if err := p.lockWrite(context.Background()); err != nil {
+		return err
+	}
+	defer p.unlockWrite()
 	return p.writeFrameLocked(data)
 }
 

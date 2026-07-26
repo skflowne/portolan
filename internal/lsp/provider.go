@@ -46,8 +46,8 @@ type Provider struct {
 	stdin   io.WriteCloser
 	stdoutR *bufio.Reader
 
-	writeMu sync.Mutex
-	nextID  atomic.Int64
+	writeGate chan struct{}
+	nextID    atomic.Int64
 
 	lifecycle transportLifecycle
 	closeOnce sync.Once
@@ -55,6 +55,7 @@ type Provider struct {
 
 	openMu    sync.Mutex
 	openFiles map[string]bool
+	readFile  func(string) ([]byte, error)
 
 	stderrBuf *stderrBuffer
 	timeout   time.Duration
@@ -99,6 +100,8 @@ func New(cfg core.Config) (*Provider, error) {
 		lifecycle: newTransportLifecycle(),
 		openFiles: make(map[string]bool),
 		stderrBuf: newStderrBuffer(),
+		writeGate: newWriteGate(),
+		readFile:  os.ReadFile,
 		timeout:   defaultRequestTimeout,
 	}
 
@@ -174,7 +177,7 @@ func (p *Provider) ensureOpen(absFile string) error {
 		return nil
 	}
 
-	data, err := os.ReadFile(absFile)
+	data, err := p.readFile(absFile)
 	if err != nil {
 		return fmt.Errorf("lsp: reading %s: %w", absFile, err)
 	}
