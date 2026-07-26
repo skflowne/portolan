@@ -3,6 +3,9 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,11 +18,32 @@ func transportStateAndCause(t *transport) (transportState, error) {
 	return t.state, t.connErr
 }
 
+func TestTransportShutdownUsesWriteAdmission(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "lifecycle.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse lifecycle.go: %v", err)
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == "writeFrameLocked" {
+			t.Error("shutdown bypasses lifecycle-aware write admission")
+		}
+		return true
+	})
+}
+
 func TestTransportCloseTransitionOwnsPendingAndWriteAdmission(t *testing.T) {
 	connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
 	ordinary, err := connection.register("1")
 	if err != nil {
 		t.Fatalf("register ordinary request: %v", err)
+	}
+	if err := connection.admitWrite(writeShutdown); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("shutdown admission while open = %v, want provider closed", err)
 	}
 	shutdown, started := connection.beginClose("2")
 	if !started {
@@ -33,6 +57,9 @@ func TestTransportCloseTransitionOwnsPendingAndWriteAdmission(t *testing.T) {
 	}
 	if err := connection.admitWrite(writeServerResponse); err != nil {
 		t.Fatalf("server response admission while closing: %v", err)
+	}
+	if err := connection.admitWrite(writeShutdown); err != nil {
+		t.Fatalf("shutdown admission while closing: %v", err)
 	}
 	if err := connection.admitWrite(writeExit); err != nil {
 		t.Fatalf("exit admission while closing: %v", err)
@@ -49,7 +76,7 @@ func TestTransportCloseTransitionOwnsPendingAndWriteAdmission(t *testing.T) {
 	if state != transportClosed || !errors.Is(cause, errProviderClosed) {
 		t.Fatalf("terminal transport = (%v, %v), want closed/provider closed", state, cause)
 	}
-	for _, policy := range []writePolicy{writeExternal, writeServerResponse, writeExit} {
+	for _, policy := range []writePolicy{writeExternal, writeServerResponse, writeShutdown, writeExit} {
 		if err := connection.admitWrite(policy); !errors.Is(err, errProviderClosed) {
 			t.Fatalf("write policy %v after close = %v, want provider closed", policy, err)
 		}
@@ -108,7 +135,7 @@ func TestTransportAbortArbitratesPendingAndRepeatedCleanup(t *testing.T) {
 	if state != transportAborted || !errors.Is(terminalCause, cause) {
 		t.Fatalf("terminal transport = (%v, %v), want aborted/%v", state, terminalCause, cause)
 	}
-	for _, policy := range []writePolicy{writeExternal, writeServerResponse, writeExit} {
+	for _, policy := range []writePolicy{writeExternal, writeServerResponse, writeShutdown, writeExit} {
 		if err := connection.admitWrite(policy); !errors.Is(err, cause) {
 			t.Fatalf("write policy %v after abort = %v, want %v", policy, err, cause)
 		}

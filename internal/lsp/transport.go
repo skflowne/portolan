@@ -27,6 +27,7 @@ type writePolicy uint8
 const (
 	writeExternal writePolicy = iota
 	writeServerResponse
+	writeShutdown
 	writeExit
 )
 
@@ -167,7 +168,7 @@ func (t *transport) admitWrite(policy writePolicy) error {
 	switch policy {
 	case writeServerResponse:
 		allowed = t.state == transportOpen || t.state == transportClosing
-	case writeExit:
+	case writeShutdown, writeExit:
 		allowed = t.state == transportClosing
 	}
 	if allowed {
@@ -283,6 +284,10 @@ func (t *transport) writeMessage(ctx context.Context, policy writePolicy, messag
 		return false, err
 	}
 	defer t.unlockWrite()
+	return t.writeAdmittedFrameLocked(ctx, policy, data)
+}
+
+func (t *transport) writeAdmittedFrameLocked(ctx context.Context, policy writePolicy, data []byte) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
