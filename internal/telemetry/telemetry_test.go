@@ -236,7 +236,12 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	}
 
 	called := make(chan struct{})
+	var diagnosticsMu sync.Mutex
+	diagnosticCount := 0
 	logger, err := FromConfig(core.Config{JSONLPath: filepath.Join(t.TempDir(), "events.jsonl")}, func(error) {
+		diagnosticsMu.Lock()
+		diagnosticCount++
+		diagnosticsMu.Unlock()
 		select {
 		case <-called:
 		default:
@@ -246,11 +251,12 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
-	started := time.Now()
-	logger.Log(context.Background(), core.Event{Tool: "cycle", Extra: map[string]any{"cycle": cycle}})
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("cyclic Extra blocked Log for %s", elapsed)
-	}
+	logDone := make(chan struct{})
+	go func() {
+		logger.Log(context.Background(), core.Event{Tool: "cycle", Extra: map[string]any{"cycle": cycle}})
+		close(logDone)
+	}()
+	waitFor(t, logDone, "cyclic Extra Log")
 	cycle["state"] = "after"
 	waitFor(t, called, "cyclic Extra diagnostic")
 	if err := logger.Close(); err != nil {
@@ -259,6 +265,11 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	jsonl := logger.(*defaultingLogger).inner.(*teeLogger).loggers[0].(*JSONLLogger)
 	if stats := jsonl.Stats(); stats.Accepted != 1 || stats.Written != 1 || stats.MarshalFallbacks != 1 {
 		t.Fatalf("cyclic Extra accounting = %+v", stats)
+	}
+	diagnosticsMu.Lock()
+	defer diagnosticsMu.Unlock()
+	if diagnosticCount != 1 {
+		t.Fatalf("cyclic Extra diagnostics = %d, want exactly 1", diagnosticCount)
 	}
 }
 
