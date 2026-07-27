@@ -155,7 +155,8 @@ func PathToURI(p string) (string, error) {
 	}
 	u := &url.URL{Scheme: "file", Path: hostPath}
 	if hasDriveURIPath(hostPath) {
-		u.RawPath = hostPath[:2] + "%3A" + hostPath[3:]
+		escaped := u.EscapedPath()
+		u.RawPath = escaped[:2] + "%3A" + escaped[3:]
 	}
 	return u.String(), nil
 }
