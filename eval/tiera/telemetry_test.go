@@ -239,6 +239,9 @@ func TestDaemonStalledOTLPShutdownIsBoundedAndJSONLComplete(t *testing.T) {
 
 	d, sess, jsonl := startTelemetryDaemon(t, server.URL+"/v1/traces")
 	callOneTelemetryTool(t, sess)
+	const completeShutdownBound = 3 * time.Second
+	started := time.Now()
+	deadline := started.Add(completeShutdownBound)
 	_ = sess.Close()
 	_ = d.Stdin.Close()
 	select {
@@ -246,14 +249,13 @@ func TestDaemonStalledOTLPShutdownIsBoundedAndJSONLComplete(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stalled OTLP request did not start")
 	}
-	started := time.Now()
-	if err, ok := d.WaitForExit(testinfra.ShortWait); !ok {
+	if err, ok := d.WaitForExit(min(testinfra.ShortWait, time.Until(deadline))); !ok {
 		t.Fatal("daemon hung on stalled OTLP collector")
 	} else if err != nil {
 		t.Fatalf("daemon failed during bounded OTLP shutdown: %v (stderr=%s)", err, d.Stderr())
 	}
-	if elapsed := time.Since(started); elapsed > 3*time.Second {
-		t.Fatalf("daemon OTLP shutdown took %s", elapsed)
+	if elapsed := time.Since(started); elapsed > completeShutdownBound {
+		t.Fatalf("complete daemon OTLP shutdown took %s", elapsed)
 	}
 	if !d.FinishStdout(time.Second) {
 		t.Fatal("stalled-collector stdout capture did not reach EOF")

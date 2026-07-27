@@ -667,7 +667,7 @@ func TestJSONLDiagnosticDispatcherIsBoundedAndObservable(t *testing.T) {
 	close(callbackGate)
 }
 
-func TestJSONLDiagnosticCallbackCanReenterStats(t *testing.T) {
+func TestJSONLDiagnosticCallbackCanReenterLog(t *testing.T) {
 	sink := &controlledSink{}
 	called := make(chan struct{})
 	var logger *JSONLLogger
