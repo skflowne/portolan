@@ -377,6 +377,107 @@ func TestCompletedDidOpenWinsCancellationRace(t *testing.T) {
 	}
 }
 
+type blockedFirstOpenWaiters struct {
+	provider     *Provider
+	writer       *recordingWriteCloser
+	leader       <-chan error
+	follower     <-chan error
+	readReturned <-chan struct{}
+	releaseRead  func()
+}
+
+func startBlockedFirstOpenWaiters(t *testing.T) blockedFirstOpenWaiters {
+	t.Helper()
+	writer := newRecordingWriteCloser()
+	readStarted := make(chan struct{})
+	readReturned := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRead) }) }
+	t.Cleanup(release)
+
+	p := newOpenUnitProvider(func(context.Context, string) ([]byte, error) {
+		close(readStarted)
+		<-releaseRead
+		close(readReturned)
+		return []byte("stale source"), nil
+	}, writer)
+	leader := make(chan error, 1)
+	go func() { leader <- p.ensureOpen(context.Background(), "/repo/a.ts") }()
+	waitSignal(t, readStarted, "first-open read")
+
+	followerCtx := newObservedWaitContext()
+	follower := make(chan error, 1)
+	go func() { follower <- p.ensureOpen(followerCtx, "/repo/a.ts") }()
+	waitSignal(t, followerCtx.waiting, "same-file transition wait")
+	return blockedFirstOpenWaiters{
+		provider: p, writer: writer, leader: leader, follower: follower,
+		readReturned: readReturned, releaseRead: release,
+	}
+}
+
+func assertNoDidOpen(t *testing.T, writer *recordingWriteCloser) {
+	t.Helper()
+	for _, method := range writer.methods() {
+		if method == "textDocument/didOpen" {
+			t.Fatal("didOpen written for canceled first-open work")
+		}
+	}
+}
+
+func TestCloseReleasesBlockedFirstOpenWaiters(t *testing.T) {
+	blocked := startBlockedFirstOpenWaiters(t)
+	blocked.provider.transport.shutdownTimeout = 5 * time.Second
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- blocked.provider.Close() }()
+	blocked.writer.waitForShutdown(t)
+	var releaseShutdownOnce sync.Once
+	releaseShutdown := func() { releaseShutdownOnce.Do(func() { close(blocked.writer.releaseShutdown) }) }
+	defer func() {
+		blocked.provider.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)})
+		releaseShutdown()
+	}()
+
+	if err := waitError(t, blocked.leader, "first-open leader after close"); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("leader error = %v, want provider closed", err)
+	}
+	if err := waitError(t, blocked.follower, "first-open follower after close"); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("follower error = %v, want provider closed", err)
+	}
+	assertNoDidOpen(t, blocked.writer)
+
+	blocked.releaseRead()
+	waitSignal(t, blocked.readReturned, "blocked read cleanup")
+	assertNoDidOpen(t, blocked.writer)
+
+	if !blocked.provider.transport.deliverResponse("1", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+		t.Fatal("shutdown response was not delivered")
+	}
+	releaseShutdown()
+	if err := waitError(t, closeResult, "provider close"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestAbortReleasesBlockedFirstOpenWaiters(t *testing.T) {
+	blocked := startBlockedFirstOpenWaiters(t)
+	cause := errors.New("reader failed")
+	blocked.provider.transport.abort(cause)
+
+	if err := waitError(t, blocked.leader, "first-open leader after abort"); !errors.Is(err, cause) {
+		t.Fatalf("leader error = %v, want %v", err, cause)
+	}
+	if err := waitError(t, blocked.follower, "first-open follower after abort"); !errors.Is(err, cause) {
+		t.Fatalf("follower error = %v, want %v", err, cause)
+	}
+	assertNoDidOpen(t, blocked.writer)
+
+	blocked.releaseRead()
+	waitSignal(t, blocked.readReturned, "blocked read cleanup")
+	assertNoDidOpen(t, blocked.writer)
+}
+
 func TestInitializeUsesDedicatedContextForRequestAndNotification(t *testing.T) {
 	var requestCtx context.Context
 	var notifyCtx context.Context

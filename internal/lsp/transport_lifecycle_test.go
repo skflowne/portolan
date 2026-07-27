@@ -20,6 +20,41 @@ func transportStateAndCause(t *transport) (transportState, error) {
 	return t.state, t.connErr
 }
 
+func TestTransportPublishesFirstUnavailableCause(t *testing.T) {
+	t.Run("graceful close", func(t *testing.T) {
+		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+		if _, started := connection.beginClose("1"); !started {
+			t.Fatal("close transition did not start")
+		}
+		waitSignal(t, connection.unavailableDone(), "transport unavailability")
+		if err := connection.unavailableError(); !errors.Is(err, errProviderClosed) {
+			t.Fatalf("unavailable error = %v, want provider closed", err)
+		}
+	})
+
+	t.Run("abort", func(t *testing.T) {
+		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+		cause := errors.New("reader failed")
+		connection.abort(cause)
+		waitSignal(t, connection.unavailableDone(), "transport unavailability")
+		if err := connection.unavailableError(); !errors.Is(err, cause) {
+			t.Fatalf("unavailable error = %v, want %v", err, cause)
+		}
+	})
+
+	t.Run("abort after close", func(t *testing.T) {
+		connection := newUnitProvider(newRecordingWriteCloser(), nil).transport
+		if _, started := connection.beginClose("1"); !started {
+			t.Fatal("close transition did not start")
+		}
+		connection.abort(errors.New("shutdown write failed"))
+		waitSignal(t, connection.unavailableDone(), "transport unavailability")
+		if err := connection.unavailableError(); !errors.Is(err, errProviderClosed) {
+			t.Fatalf("unavailable error after abort = %v, want first cause provider closed", err)
+		}
+	})
+}
+
 func TestTransportShutdownUsesWriteAdmission(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "lifecycle.go", nil, 0)
 	if err != nil {
