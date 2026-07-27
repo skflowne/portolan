@@ -153,7 +153,19 @@ func PathToURI(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return (&url.URL{Scheme: "file", Path: hostPath}).String(), nil
+	u := &url.URL{Scheme: "file", Path: hostPath}
+	if hasDriveURIPath(hostPath) {
+		u.RawPath = hostPath[:2] + "%3A" + hostPath[3:]
+	}
+	return u.String(), nil
+}
+
+func hasDriveURIPath(p string) bool {
+	return len(p) >= 3 && p[0] == '/' && isASCIILetter(p[1]) && p[2] == ':'
+}
+
+func hasEscapedDriveColon(rawPath string) bool {
+	return len(rawPath) >= 5 && rawPath[0] == '/' && isASCIILetter(rawPath[1]) && strings.EqualFold(rawPath[2:5], "%3a")
 }
 
 func uriWSLPath(uri string, u *url.URL) (string, error) {
@@ -187,7 +199,7 @@ func URIToPath(uri string) (string, error) {
 		return "", fmt.Errorf("pathnorm: %q has an empty path", uri)
 	}
 	p := u.Path
-	if len(p) >= 3 && p[0] == '/' && isASCIILetter(p[1]) && p[2] == ':' {
+	if hasDriveURIPath(p) && !hasEscapedDriveColon(u.RawPath) {
 		p = p[1:]
 	}
 	return Canonicalize(p)

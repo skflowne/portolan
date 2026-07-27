@@ -195,6 +195,8 @@ func TestPathToURI(t *testing.T) {
 		{"percent", `/home/me/100%/a.ts`, `file:///home/me/100%25/a.ts`},
 		{"fragment character", `/home/me/a#b.ts`, `file:///home/me/a%23b.ts`},
 		{"query character", `/home/me/a?b.ts`, `file:///home/me/a%3Fb.ts`},
+		{"POSIX drive-looking name", `/C:notes`, `file:///C%3Anotes`},
+		{"POSIX drive-looking segment", `/C:/project/a.ts`, `file:///C%3A/project/a.ts`},
 		{"Windows drive", `C:\Users\me\a.ts`, `file:///mnt/c/Users/me/a.ts`},
 		{"wsl UNC", `\\wsl$\Ubuntu\home\me\a.ts`, `file:///home/me/a.ts`},
 	}
@@ -302,6 +304,10 @@ func TestPathURIRoundTrip(t *testing.T) {
 	}{
 		{`/home/me/my proj/a.ts`, `/home/me/my proj/a.ts`},
 		{`/mnt/C/Users/me/déjà vu/文件.ts`, `/mnt/c/Users/me/déjà vu/文件.ts`},
+		{`/home/me/emoji-🚀-dir/a.ts`, `/home/me/emoji-🚀-dir/a.ts`},
+		{`/home/me/a+b&c=d.ts`, `/home/me/a+b&c=d.ts`},
+		{`/C:notes`, `/C:notes`},
+		{`/C:/project/a.ts`, `/C:/project/a.ts`},
 		{`C:\Users\me\a.ts`, `/mnt/c/Users/me/a.ts`},
 		{`\\wsl.localhost\Ubuntu\home\me\a.ts`, `/home/me/a.ts`},
 	}
