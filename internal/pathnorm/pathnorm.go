@@ -52,7 +52,7 @@ func canonicalWSLPath(input, server, distro string, rest []string) (string, erro
 	if err := currentDistro(input, distro); err != nil {
 		return "", err
 	}
-	return path.Clean("/" + strings.Join(rest, "/")), nil
+	return canonicalPOSIX("/" + strings.Join(rest, "/"))
 }
 
 func canonicalUNC(p string) (string, error) {
@@ -83,6 +83,20 @@ func splitMountDrive(p string) (drive, rest string, ok bool) {
 	return drive, rest, true
 }
 
+func canonicalPOSIX(p string) (string, error) {
+	if strings.IndexByte(p, 0) >= 0 {
+		return "", fmt.Errorf("pathnorm: path %q contains NUL", p)
+	}
+	if strings.HasPrefix(p, "//") {
+		return "", fmt.Errorf("pathnorm: unsupported network path %q", p)
+	}
+	cleaned := path.Clean(p)
+	if drive, rest, ok := splitMountDrive(cleaned); ok {
+		return "/mnt/" + drive + rest, nil
+	}
+	return cleaned, nil
+}
+
 // Canonicalize returns the strict canonical host identity for p.
 func Canonicalize(p string) (string, error) {
 	if p == "" {
@@ -94,15 +108,8 @@ func Canonicalize(p string) (string, error) {
 	if isUNCPath(p) {
 		return canonicalUNC(p)
 	}
-	if strings.HasPrefix(p, "//") {
-		return "", fmt.Errorf("pathnorm: unsupported network path %q", p)
-	}
 	if strings.HasPrefix(p, "/") {
-		cleaned := path.Clean(p)
-		if drive, rest, ok := splitMountDrive(cleaned); ok {
-			return "/mnt/" + drive + rest, nil
-		}
-		return cleaned, nil
+		return canonicalPOSIX(p)
 	}
 	if isDriveLetterPath(p) {
 		if len(p) == 2 {
