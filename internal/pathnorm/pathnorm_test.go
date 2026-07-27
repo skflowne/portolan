@@ -242,6 +242,8 @@ func TestURIToPath(t *testing.T) {
 		{"localhost", `file://localhost/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"localhost case insensitive", `file://LOCALHOST/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"Windows drive", `file:///C:/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
+		{"escaped Windows drive letter", `file:///%43:/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
+		{"escaped POSIX drive-looking name", `file:///%43%3A/project/a.ts`, "Ubuntu", `/C:/project/a.ts`},
 		{"localhost Windows drive", `file://localhost/C:/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl dollar authority", `file://wsl$/Ubuntu/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"wsl dollar authority case insensitive", `file://WSL$/uBuNtU/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},

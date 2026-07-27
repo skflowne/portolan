@@ -169,7 +169,44 @@ func hasDriveURIPath(p string) bool {
 }
 
 func hasEscapedDriveColon(rawPath string) bool {
-	return len(rawPath) >= 5 && rawPath[0] == '/' && isASCIILetter(rawPath[1]) && strings.EqualFold(rawPath[2:5], "%3a")
+	if len(rawPath) < 5 || rawPath[0] != '/' {
+		return false
+	}
+	letterEnd := 2
+	if rawPath[1] == '%' {
+		if len(rawPath) < 7 {
+			return false
+		}
+		letter, ok := unescapeByte(rawPath[2], rawPath[3])
+		if !ok || !isASCIILetter(letter) {
+			return false
+		}
+		letterEnd = 4
+	} else if !isASCIILetter(rawPath[1]) {
+		return false
+	}
+	return len(rawPath) >= letterEnd+3 && strings.EqualFold(rawPath[letterEnd:letterEnd+3], "%3a")
+}
+
+func unescapeByte(high, low byte) (byte, bool) {
+	hex := func(b byte) (byte, bool) {
+		switch {
+		case b >= '0' && b <= '9':
+			return b - '0', true
+		case b >= 'a' && b <= 'f':
+			return b - 'a' + 10, true
+		case b >= 'A' && b <= 'F':
+			return b - 'A' + 10, true
+		default:
+			return 0, false
+		}
+	}
+	hi, ok := hex(high)
+	if !ok {
+		return 0, false
+	}
+	lo, ok := hex(low)
+	return hi<<4 | lo, ok
 }
 
 func uriWSLPath(uri string, u *url.URL) (string, error) {
