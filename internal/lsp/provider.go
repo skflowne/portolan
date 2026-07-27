@@ -161,6 +161,13 @@ func (p *Provider) readFileContext(ctx context.Context, path string) (string, er
 		default:
 			return "", ctx.Err()
 		}
+	case <-p.transport.unavailableDone():
+		select {
+		case got := <-result:
+			return got.text, got.err
+		default:
+			return "", p.transport.unavailableError()
+		}
 	}
 }
 

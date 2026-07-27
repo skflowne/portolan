@@ -72,10 +72,12 @@ type transportConfig struct {
 // transport owns the JSON-RPC connection from write admission through process
 // reaping. Provider owns language operations and delegates all transport state.
 type transport struct {
-	mu      sync.Mutex
-	state   transportState
-	connErr error
-	pending map[string]*pendingRequest
+	mu               sync.Mutex
+	state            transportState
+	connErr          error
+	unavailable      chan struct{}
+	unavailableCause error
+	pending          map[string]*pendingRequest
 
 	input       io.WriteCloser
 	inputClosed bool
@@ -114,6 +116,7 @@ func newTransport(cfg transportConfig) *transport {
 	}
 	return &transport{
 		pending:                  make(map[string]*pendingRequest),
+		unavailable:              make(chan struct{}),
 		input:                    cfg.input,
 		output:                   bufio.NewReader(output),
 		stderr:                   stderr,
@@ -162,6 +165,30 @@ func (t *transport) isOpen() bool {
 	return t.state == transportOpen
 }
 
+func (t *transport) unavailableDone() <-chan struct{} {
+	return t.unavailable
+}
+
+func (t *transport) unavailableError() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.unavailableCause != nil {
+		return t.unavailableCause
+	}
+	return errProviderClosed
+}
+
+func (t *transport) transitionFromOpenLocked(state transportState, cause error) bool {
+	if t.state != transportOpen {
+		return false
+	}
+	t.state = state
+	t.connErr = cause
+	t.unavailableCause = cause
+	close(t.unavailable)
+	return true
+}
+
 func (t *transport) admitWrite(policy writePolicy) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -197,12 +224,10 @@ func (t *transport) deliverResponse(key string, message *jsonrpcMessage) bool {
 
 func (t *transport) beginClose(key string) (*pendingRequest, bool) {
 	t.mu.Lock()
-	if t.state != transportOpen {
+	if !t.transitionFromOpenLocked(transportClosing, errProviderClosed) {
 		t.mu.Unlock()
 		return nil, false
 	}
-	t.state = transportClosing
-	t.connErr = errProviderClosed
 	waiting := t.drainPendingLocked()
 	shutdown := newPendingRequest()
 	t.pending[key] = shutdown
@@ -343,8 +368,10 @@ func (t *transport) abort(cause error) {
 		t.mu.Unlock()
 		return
 	}
-	t.state = transportAborted
-	t.connErr = cause
+	if !t.transitionFromOpenLocked(transportAborted, cause) {
+		t.state = transportAborted
+		t.connErr = cause
+	}
 	waiting := t.drainPendingLocked()
 	t.mu.Unlock()
 
