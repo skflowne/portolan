@@ -89,7 +89,7 @@ sequenceDiagram
     participant S as MCP server
     participant T as Tools layer
     participant P as lsp.Provider
-    participant X as Provider-owned transport<br/>(write gate · lifecycle · reader)
+    participant R as lsp.transport<br/>(write gate · lifecycle · reader)
     participant G as tsgo LSP
     participant L as JSONL log
 
@@ -100,20 +100,20 @@ sequenceDiagram
     T->>P: DocumentSymbols(file, operation context)
     opt first query for this file
         P->>P: read file under per-file open transition
-        P->>X: dispatch textDocument/didOpen
-        X->>G: textDocument/didOpen
+        P->>R: dispatch textDocument/didOpen
+        R->>G: textDocument/didOpen
     end
-    P->>X: register + dispatch textDocument/documentSymbol
-    X->>G: textDocument/documentSymbol
-    G-->>X: symbol tree
-    X-->>P: demultiplexed response
+    P->>R: register + dispatch textDocument/documentSymbol
+    R->>G: textDocument/documentSymbol
+    G-->>R: symbol tree
+    R-->>P: demultiplexed response
     P-->>T: []Symbol
     T->>T: resolve name → Position (SelRange.Start)
     T->>P: Definition(file, pos, same operation context)
-    P->>X: register + dispatch textDocument/definition
-    X->>G: textDocument/definition
-    G-->>X: Location[]
-    X-->>P: demultiplexed response
+    P->>R: register + dispatch textDocument/definition
+    R->>G: textDocument/definition
+    G-->>R: Location[]
+    R-->>P: demultiplexed response
     P-->>T: []core.Location
     T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
     T->>L: emit exactly one Event (tool, duration, size, …)
@@ -126,17 +126,21 @@ context covers path preparation, first-open disk reads and `didOpen`, name resol
 requests, serialization, pipe writes, and response waits; the provider does not reset the deadline
 between stages. Provider initialization keeps its separate 20-second budget for project loading.
 
-The `lsp.Provider` is concurrency-safe: one background reader goroutine demuxes responses by
-JSON-RPC id into per-request lifecycle entries that accept exactly one terminal response or error.
-Response delivery, cancellation cleanup, connection failure, and explicit close share that owner,
-so late responses are ignored. Per-file open transitions retain one canonical `didOpen` while
-allowing unrelated files to read concurrently. A context-aware write gate serializes complete frames;
-cancellation before dispatch writes nothing, cancellation that wins after dispatch removes the
-pending request and schedules a bounded best-effort `$/cancelRequest` (dropped if its write gate
-budget expires), and cancellation during a blocked or partial frame closes the pipe and kills the
-now-unusable subprocess. Server-initiated requests such as `client/registerCapability`
-are answered asynchronously within a bounded internal-write budget, so they cannot stall response
-demultiplexing.
+The `lsp.Provider` is concurrency-safe and delegates JSON-RPC connection ownership to one
+`transport`. That owner arbitrates open, closing, closed, and aborted states; pending-request
+completion; write admission; stdin closure; process kill and reap; and repeated close or abort.
+External requests, notifications, and `$/cancelRequest` writes are admitted only while open. The
+shutdown request owns the transition to closing, server-request responses remain permitted while
+open or closing until stdin closure begins, `exit` is permitted only while closing, and no frame is
+admitted after stdin closure or in a terminal state.
+One background reader goroutine demuxes responses into pending entries that accept exactly one
+terminal response or error, so late responses are ignored. Per-file open transitions retain one
+canonical `didOpen` while allowing unrelated files to read concurrently. A context-aware write gate
+serializes complete frames; cancellation before dispatch writes nothing, cancellation that wins
+after dispatch removes the pending request and schedules a bounded best-effort cancellation
+notification, and cancellation during a blocked or partial frame aborts the transport. Server
+requests such as `client/registerCapability` are answered asynchronously within a bounded
+server-response budget, so they cannot stall response demultiplexing.
 
 ---
 

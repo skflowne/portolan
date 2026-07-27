@@ -3,406 +3,353 @@ package lsp
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// readFrame reads one LSP message off r: a block of "Key: Value\r\n" headers
-// terminated by a blank line, followed by exactly Content-Length bytes of
-// JSON body.
-func readFrame(r *bufio.Reader) ([]byte, error) {
-	contentLength := -1
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		trimmed := strings.TrimRight(line, "\r\n")
-		if trimmed == "" {
-			break
-		}
-		parts := strings.SplitN(trimmed, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		if strings.EqualFold(key, "Content-Length") {
-			n, err := strconv.Atoi(val)
-			if err != nil {
-				return nil, fmt.Errorf("lsp: bad Content-Length %q: %w", val, err)
-			}
-			contentLength = n
-		}
-	}
-	if contentLength < 0 {
-		return nil, errors.New("lsp: message missing Content-Length header")
-	}
-	buf := make([]byte, contentLength)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, err
-	}
-	return buf, nil
-}
+var errProviderClosed = errors.New("lsp: provider closed")
 
-func newWriteGate() chan struct{} {
-	return make(chan struct{}, 1)
-}
+type transportState uint8
 
-func (p *Provider) lockWrite(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	select {
-	case p.writeGate <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
+const (
+	transportOpen transportState = iota
+	transportClosing
+	transportClosed
+	transportAborted
+)
 
-func (p *Provider) unlockWrite() {
-	<-p.writeGate
-}
+type writePolicy uint8
 
-type contextWorkResult[T any] struct {
-	value T
-	err   error
-}
-
-// runContextWork bounds pure in-memory work that has no context-aware API.
-// The buffered result lets canceled callers return while finite work exits.
-func runContextWork[T any](ctx context.Context, work func() (T, error)) (T, error) {
-	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	result := make(chan contextWorkResult[T], 1)
-	go func() {
-		value, err := work()
-		result <- contextWorkResult[T]{value: value, err: err}
-	}()
-	select {
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	case got := <-result:
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
-		return got.value, got.err
-	}
-}
-
-func marshalMessage(ctx context.Context, v any) ([]byte, error) {
-	return runContextWork(ctx, func() ([]byte, error) {
-		data, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("lsp: marshaling message: %w", err)
-		}
-		return data, nil
-	})
-}
+const (
+	writeExternal writePolicy = iota
+	writeServerResponse
+	writeShutdown
+	writeExit
+)
 
 const (
 	defaultInternalWriteTimeout     = time.Second
 	defaultCancellationWriteTimeout = 100 * time.Millisecond
 )
 
-type frameWriteResult struct {
-	written int
+type pendingResult struct {
+	message *jsonrpcMessage
 	err     error
 }
 
-func frameBytes(data []byte) []byte {
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
-	frame := make([]byte, 0, len(header)+len(data))
-	frame = append(frame, header...)
-	return append(frame, data...)
+type pendingRequest struct {
+	done   chan struct{}
+	once   sync.Once
+	result pendingResult
 }
 
-func writeFull(w io.Writer, data []byte, complete func()) (int, error) {
-	written := 0
-	for written < len(data) {
-		n, err := w.Write(data[written:])
-		written += n
-		if err != nil {
-			return written, err
-		}
-		if n == 0 {
-			return written, io.ErrShortWrite
-		}
-	}
-	complete()
-	return written, nil
+func newPendingRequest() *pendingRequest {
+	return &pendingRequest{done: make(chan struct{})}
 }
 
-// writeMessage admits and writes one complete external frame. Cancellation
-// while waiting for the gate leaves the transport usable; cancellation once a
-// frame write starts makes the stream unusable and aborts the provider.
-func (p *Provider) writeMessage(ctx context.Context, v any) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	data, err := marshalMessage(ctx, v)
-	if err != nil {
-		return false, err
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := p.lockWrite(ctx); err != nil {
-		return false, err
-	}
-	defer p.unlockWrite()
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := p.lifecycle.admitExternalWrite(); err != nil {
-		return false, err
-	}
-	return p.writeFrameLocked(ctx, data)
-}
-
-func (p *Provider) writeInternalMessage(ctx context.Context, v any) (bool, error) {
-	data, err := marshalMessage(ctx, v)
-	if err != nil {
-		return false, err
-	}
-	if err := p.lockWrite(ctx); err != nil {
-		return false, err
-	}
-	defer p.unlockWrite()
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	return p.writeFrameLocked(ctx, data)
-}
-
-const (
-	frameWriting uint32 = iota
-	frameDispatched
-	frameAborted
-)
-
-func (p *Provider) writeFrameLocked(ctx context.Context, data []byte) (bool, error) {
-	frame, err := runContextWork(ctx, func() ([]byte, error) {
-		return frameBytes(data), nil
+func (r *pendingRequest) complete(result pendingResult) bool {
+	completed := false
+	r.once.Do(func() {
+		r.result = result
+		completed = true
+		close(r.done)
 	})
-	if err != nil {
-		return false, err
-	}
-	result := make(chan frameWriteResult, 1)
-	var state atomic.Uint32
-	go func() {
-		written, err := writeFull(p.stdin, frame, func() {
-			if state.CompareAndSwap(frameWriting, frameDispatched) && p.afterFrameDispatch != nil {
-				p.afterFrameDispatch()
-			}
-		})
-		result <- frameWriteResult{written: written, err: err}
-	}()
+	return completed
+}
 
+type transportConfig struct {
+	input       io.WriteCloser
+	output      io.Reader
+	stderr      *stderrBuffer
+	killProcess func() error
+	waitProcess func() error
+}
+
+// transport owns the JSON-RPC connection from write admission through process
+// reaping. Provider owns language operations and delegates all transport state.
+type transport struct {
+	mu      sync.Mutex
+	state   transportState
+	connErr error
+	pending map[string]*pendingRequest
+
+	input       io.WriteCloser
+	inputClosed bool
+	output      *bufio.Reader
+	stderr      *stderrBuffer
+	writeGate   chan struct{}
+	nextID      atomic.Int64
+
+	closeOnce     sync.Once
+	closeErr      error
+	inputOnce     sync.Once
+	inputCloseErr error
+	killOnce      sync.Once
+	waitOnce      sync.Once
+	processDone   chan struct{}
+	killProcess   func() error
+	waitProcess   func() error
+
+	internalWriteTimeout     time.Duration
+	cancellationWriteTimeout time.Duration
+	shutdownTimeout          time.Duration
+	exitWait                 time.Duration
+	killWait                 time.Duration
+	afterFrameDispatch       func()
+	observeCancellation      func(error)
+}
+
+func newTransport(cfg transportConfig) *transport {
+	output := cfg.output
+	if output == nil {
+		output = strings.NewReader("")
+	}
+	stderr := cfg.stderr
+	if stderr == nil {
+		stderr = newStderrBuffer()
+	}
+	return &transport{
+		pending:                  make(map[string]*pendingRequest),
+		input:                    cfg.input,
+		output:                   bufio.NewReader(output),
+		stderr:                   stderr,
+		writeGate:                make(chan struct{}, 1),
+		processDone:              make(chan struct{}),
+		killProcess:              cfg.killProcess,
+		waitProcess:              cfg.waitProcess,
+		internalWriteTimeout:     defaultInternalWriteTimeout,
+		cancellationWriteTimeout: defaultCancellationWriteTimeout,
+		shutdownTimeout:          defaultShutdownTimeout,
+		exitWait:                 defaultExitWait,
+		killWait:                 defaultKillWait,
+	}
+}
+
+func (t *transport) lockWrite(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
-	case got := <-result:
-		if got.err != nil {
-			state.CompareAndSwap(frameWriting, frameAborted)
-			p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
-			return false, got.err
-		}
-		if state.Load() != frameDispatched {
-			return false, ctx.Err()
-		}
-		return true, nil
+	case t.writeGate <- struct{}{}:
+		return nil
 	case <-ctx.Done():
-		if !state.CompareAndSwap(frameWriting, frameAborted) {
-			got := <-result
-			if got.err != nil {
-				p.abortTransport(fmt.Errorf("writing LSP frame after %d bytes: %w", got.written, got.err))
-				return false, got.err
-			}
-			return true, nil
-		}
-		p.abortTransport(ctx.Err())
-		return false, ctx.Err()
+		return ctx.Err()
 	}
 }
 
-func (p *Provider) closeInput() error {
-	p.stdinCloseOnce.Do(func() {
-		p.stdinCloseErr = p.stdin.Close()
-	})
-	return p.stdinCloseErr
+func (t *transport) unlockWrite() {
+	<-t.writeGate
 }
 
-func (p *Provider) abortTransport(cause error) {
-	p.abortOnce.Do(func() {
-		p.lifecycle.shutdown(cause)
-		_ = p.closeInput()
-		if p.killProcess != nil {
-			_ = p.killProcess()
-		}
-	})
+func (t *transport) register(key string) (*pendingRequest, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state != transportOpen {
+		return nil, t.connectionErrorLocked()
+	}
+	request := newPendingRequest()
+	t.pending[key] = request
+	return request, nil
 }
 
-// call sends a JSON-RPC request and consumes only the caller's operation
-// context. A dispatched request canceled by that context gets a best-effort
-// JSON-RPC cancellation notification.
-func (p *Provider) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := p.nextID.Add(1)
-	key := strconv.FormatInt(id, 10)
-	request, err := p.lifecycle.register(key)
+func (t *transport) isOpen() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state == transportOpen
+}
+
+func (t *transport) admitWrite(policy writePolicy) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	allowed := t.state == transportOpen
+	switch policy {
+	case writeServerResponse:
+		allowed = t.state == transportOpen || t.state == transportClosing
+	case writeShutdown, writeExit:
+		allowed = t.state == transportClosing
+	}
+	if allowed && !t.inputClosed {
+		return nil
+	}
+	return t.connectionErrorLocked()
+}
+
+func (t *transport) complete(key string, result pendingResult) bool {
+	t.mu.Lock()
+	request, ok := t.pending[key]
+	if ok {
+		delete(t.pending, key)
+	}
+	t.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return request.complete(result)
+}
+
+func (t *transport) deliverResponse(key string, message *jsonrpcMessage) bool {
+	return t.complete(key, pendingResult{message: message})
+}
+
+func (t *transport) beginClose(key string) (*pendingRequest, bool) {
+	t.mu.Lock()
+	if t.state != transportOpen {
+		t.mu.Unlock()
+		return nil, false
+	}
+	t.state = transportClosing
+	t.connErr = errProviderClosed
+	waiting := t.drainPendingLocked()
+	shutdown := newPendingRequest()
+	t.pending[key] = shutdown
+	t.mu.Unlock()
+
+	completePending(waiting, errProviderClosed)
+	return shutdown, true
+}
+
+func (t *transport) finishClose() {
+	t.mu.Lock()
+	if t.state != transportClosing {
+		t.mu.Unlock()
+		return
+	}
+	t.state = transportClosed
+	waiting := t.drainPendingLocked()
+	t.mu.Unlock()
+	completePending(waiting, errProviderClosed)
+}
+
+func (t *transport) readerFailed(cause error) {
+	if cause == nil {
+		cause = errors.New("lsp: connection closed")
+	}
+
+	t.mu.Lock()
+	if t.state == transportClosing {
+		waiting := t.drainPendingLocked()
+		t.mu.Unlock()
+		completePending(waiting, cause)
+		return
+	}
+	t.mu.Unlock()
+	t.abort(cause)
+}
+
+func (t *transport) drainPendingLocked() []*pendingRequest {
+	waiting := make([]*pendingRequest, 0, len(t.pending))
+	for id, request := range t.pending {
+		waiting = append(waiting, request)
+		delete(t.pending, id)
+	}
+	return waiting
+}
+
+func completePending(waiting []*pendingRequest, cause error) {
+	for _, request := range waiting {
+		request.complete(pendingResult{err: cause})
+	}
+}
+
+func (t *transport) connectionErrorLocked() error {
+	if t.connErr != nil {
+		return t.connErr
+	}
+	return errProviderClosed
+}
+
+func (t *transport) waitPending(ctx context.Context, key string, request *pendingRequest) (pendingResult, bool) {
+	select {
+	case <-request.done:
+		return request.result, false
+	case <-ctx.Done():
+		canceled := t.complete(key, pendingResult{err: ctx.Err()})
+		<-request.done
+		return request.result, canceled
+	}
+}
+
+func (t *transport) writeMessage(ctx context.Context, policy writePolicy, message any) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	data, err := marshalMessage(ctx, message)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-
-	dispatched, writeErr := p.writeMessage(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
-	if writeErr != nil {
-		p.lifecycle.complete(key, pendingResult{err: fmt.Errorf("writing request: %w", writeErr)})
+	if err := t.lockWrite(ctx); err != nil {
+		return false, err
 	}
-
-	result, canceled := p.waitPending(ctx, key, request)
-	if canceled && dispatched {
-		p.sendCancellation(id)
-	}
-	if result.err != nil {
-		return nil, fmt.Errorf("lsp: %s: %w", method, result.err)
-	}
-	if result.message == nil {
-		return nil, fmt.Errorf("lsp: %s: connection closed", method)
-	}
-	if result.message.Error != nil {
-		return nil, fmt.Errorf("lsp: %s: server error %d: %s", method, result.message.Error.Code, result.message.Error.Message)
-	}
-	return result.message.Result, nil
+	defer t.unlockWrite()
+	return t.writeAdmittedFrameLocked(ctx, policy, data)
 }
 
-func (p *Provider) sendCancellation(id int64) {
-	go func() {
-		timeout := p.cancellationWriteTimeout
-		if timeout <= 0 {
-			timeout = defaultCancellationWriteTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		_, err := p.writeMessage(ctx, rpcNotification{
-			JSONRPC: "2.0",
-			Method:  "$/cancelRequest",
-			Params:  cancelParams{ID: id},
-		})
-		if p.observeCancellation != nil {
-			p.observeCancellation(err)
-		}
-	}()
-}
-
-// notify sends a JSON-RPC notification (no response expected).
-func (p *Provider) notify(ctx context.Context, method string, params any) error {
-	if _, err := p.writeMessage(ctx, rpcNotification{JSONRPC: "2.0", Method: method, Params: params}); err != nil {
-		return fmt.Errorf("lsp: %s: %w", method, err)
+func (t *transport) writeAdmittedFrameLocked(ctx context.Context, policy writePolicy, data []byte) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	return nil
-}
-
-// readLoop is the single background reader: it demuxes incoming frames by
-// JSON-RPC id into per-request lifecycle entries. It runs for the
-// lifetime of the subprocess and exits (marking the provider closed) on any
-// read/decode error, most commonly EOF when the process exits.
-func (p *Provider) readLoop() {
-	for {
-		data, err := readFrame(p.stdoutR)
-		if err != nil {
-			extra := p.stderrBuf.String()
-			cause := fmt.Errorf("lsp: connection closed: %w", err)
-			if extra != "" {
-				cause = fmt.Errorf("%w (stderr: %s)", cause, extra)
-			}
-			p.shutdownPending(cause)
-			return
-		}
-
-		var msg jsonrpcMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			continue // malformed frame; skip rather than crash the loop
-		}
-
-		switch {
-		case msg.Method != "" && len(msg.ID) > 0:
-			// Server-initiated request (e.g. tsgo's
-			// client/registerCapability, sent with a *string* id like
-			// "ts1"). We don't implement any of these — reply
-			// MethodNotFound so tsgo isn't left waiting on a response that
-			// never comes, which would otherwise stall its request queue.
-			p.respondMethodNotFound(msg.ID, msg.Method)
-		case msg.Method != "":
-			// Notification from the server (e.g. window/logMessage,
-			// textDocument/publishDiagnostics). Nothing to do with it yet.
-		case len(msg.ID) > 0:
-			m := msg
-			p.lifecycle.deliverResponse(string(msg.ID), &m)
-		}
+	if err := t.admitWrite(policy); err != nil {
+		return false, err
 	}
+	return t.writeFrameLocked(ctx, data)
 }
 
-func (p *Provider) respondMethodNotFound(id json.RawMessage, method string) {
-	go func() {
-		timeout := p.internalWriteTimeout
-		if timeout <= 0 {
-			timeout = defaultInternalWriteTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		_, _ = p.writeMessage(ctx, rpcErrorResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Error:   rpcError{Code: -32601, Message: fmt.Sprintf("method not found: %s", method)},
-		})
-	}()
-}
-
-// shutdownPending marks the provider closed and releases every goroutine
-// currently blocked in call() with cerr.
-func (p *Provider) shutdownPending(cerr error) {
-	p.lifecycle.shutdown(cerr)
-}
-
-// stderrBuffer captures the subprocess's recent stderr output so transport
-// errors (e.g. tsgo crashing) can be reported with useful context.
-type stderrBuffer struct {
-	mu  sync.Mutex
-	buf []byte
-}
-
-const stderrBufferCap = 8192
-
-func newStderrBuffer() *stderrBuffer { return &stderrBuffer{} }
-
-func (b *stderrBuffer) drain(r io.Reader) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			b.mu.Lock()
-			b.buf = append(b.buf, buf[:n]...)
-			if len(b.buf) > stderrBufferCap {
-				b.buf = b.buf[len(b.buf)-stderrBufferCap:]
-			}
-			b.mu.Unlock()
-		}
-		if err != nil {
-			return
-		}
+func (t *transport) closeInputAfterWrites(ctx context.Context) error {
+	t.mu.Lock()
+	closing := t.state == transportClosing && !t.inputClosed
+	t.mu.Unlock()
+	if !closing {
+		return t.closeInput()
 	}
+	if err := t.lockWrite(ctx); err != nil {
+		t.abort(err)
+		return err
+	}
+	defer t.unlockWrite()
+	return t.closeInput()
 }
 
-func (b *stderrBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return strings.TrimSpace(string(b.buf))
+func (t *transport) closeInput() error {
+	t.inputOnce.Do(func() {
+		t.mu.Lock()
+		t.inputClosed = true
+		t.mu.Unlock()
+		if t.input != nil {
+			t.inputCloseErr = t.input.Close()
+		}
+	})
+	return t.inputCloseErr
+}
+
+func (t *transport) kill() {
+	t.killOnce.Do(func() {
+		if t.killProcess != nil {
+			_ = t.killProcess()
+		}
+	})
+}
+
+func (t *transport) abort(cause error) {
+	if cause == nil {
+		cause = errors.New("lsp: connection closed")
+	}
+
+	t.mu.Lock()
+	if t.state == transportClosed || t.state == transportAborted {
+		t.mu.Unlock()
+		return
+	}
+	t.state = transportAborted
+	t.connErr = cause
+	waiting := t.drainPendingLocked()
+	t.mu.Unlock()
+
+	completePending(waiting, cause)
+	_ = t.closeInput()
+	t.kill()
+	t.startProcessWait()
 }
