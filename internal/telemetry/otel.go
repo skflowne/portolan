@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -203,7 +204,7 @@ func (o *OTELLogger) logSnapshot(ctx context.Context, snapshot eventSnapshot) {
 		attribute.Int("result_size", ev.ResultSize),
 		attribute.Bool("truncated", ev.Truncated),
 		attribute.Bool("stale", ev.Stale),
-		attribute.Int64("generation", int64(ev.Generation)),
+		attribute.String("generation", strconv.FormatUint(ev.Generation, 10)),
 	}
 	if ev.Timestamp != "" {
 		attrs = append(attrs, attribute.String("ts", ev.Timestamp))

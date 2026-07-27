@@ -234,7 +234,9 @@ func readJSONL(t *testing.T, path string) []map[string]any {
 			continue
 		}
 		var m map[string]any
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.UseNumber()
+		if err := decoder.Decode(&m); err != nil {
 			t.Errorf("malformed JSONL line: %q: %v", line, err)
 			continue
 		}

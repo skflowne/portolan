@@ -2,7 +2,9 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -167,11 +169,14 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 	for key, want := range map[string]int64{
 		"duration_ms": int64(ev.DurationMs),
 		"result_size": int64(ev.ResultSize),
-		"generation":  int64(ev.Generation),
 	} {
 		if got := requireAttribute(t, attrs, key).AsInt64(); got != want {
 			t.Errorf("attribute %s = %d, want %d", key, got, want)
 		}
+	}
+	generation := requireAttribute(t, attrs, "generation")
+	if generation.Type() != attribute.STRING || generation.AsString() != "7" {
+		t.Errorf("generation attribute = type %s value %q, want STRING 7", generation.Type(), generation.AsString())
 	}
 	for key, want := range map[string]bool{"truncated": ev.Truncated, "stale": ev.Stale} {
 		if got := requireAttribute(t, attrs, key).AsBool(); got != want {
@@ -180,6 +185,49 @@ func TestOTELLoggerExportsOneCompleteSpan(t *testing.T) {
 	}
 	if stats := logger.Stats(); stats.Accepted != 1 || stats.Exported != 1 || stats.Pending != 0 {
 		t.Fatalf("OTEL stats = %+v", stats)
+	}
+}
+
+func TestOTELLoggerPreservesFullGenerationDomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		generation uint64
+		want       string
+	}{
+		{name: "above max int64", generation: uint64(math.MaxInt64) + 1, want: "9223372036854775808"},
+		{name: "max uint64", generation: math.MaxUint64, want: "18446744073709551615"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := &capturingExporter{}
+			logger := testOTEL(t, exporter, nil)
+			event := core.Event{Tool: "generation", Generation: tt.generation}
+			logger.Log(context.Background(), event)
+			if err := logger.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			spans := exporter.snapshot()
+			if len(spans) != 1 {
+				t.Fatalf("exported spans = %d, want 1", len(spans))
+			}
+			generation := requireAttribute(t, attributesByName(spans[0].Attributes), "generation")
+			if generation.Type() != attribute.STRING || generation.AsString() != tt.want {
+				t.Errorf("OTLP generation = type %s value %q, want STRING %s", generation.Type(), generation.AsString(), tt.want)
+			}
+
+			line, oversize, fallback := encodeJSONLRecord(snapshotEvent(event), defaultMaxRecordBytes)
+			if oversize || fallback {
+				t.Fatalf("JSONL encoding flags = oversize %t fallback %t", oversize, fallback)
+			}
+			var record map[string]json.RawMessage
+			if err := json.Unmarshal(line, &record); err != nil {
+				t.Fatalf("decode JSONL: %v", err)
+			}
+			if got := string(record["generation"]); got != tt.want || got != generation.AsString() {
+				t.Errorf("JSONL generation = %s, OTLP = %q, want %s", got, generation.AsString(), tt.want)
+			}
+		})
 	}
 }
 
