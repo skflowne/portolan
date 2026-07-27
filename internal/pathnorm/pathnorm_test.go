@@ -197,6 +197,7 @@ func TestPathToURI(t *testing.T) {
 		{"query character", `/home/me/a?b.ts`, `file:///home/me/a%3Fb.ts`},
 		{"POSIX drive-looking name", `/C:notes`, `file:///C%3Anotes`},
 		{"POSIX drive-looking segment", `/C:/project/a.ts`, `file:///C%3A/project/a.ts`},
+		{"escaped POSIX drive-looking segment", `/C:/my project/déjà.ts`, `file:///C%3A/my%20project/d%C3%A9j%C3%A0.ts`},
 		{"Windows drive", `C:\Users\me\a.ts`, `file:///mnt/c/Users/me/a.ts`},
 		{"wsl UNC", `\\wsl$\Ubuntu\home\me\a.ts`, `file:///home/me/a.ts`},
 	}
@@ -308,6 +309,7 @@ func TestPathURIRoundTrip(t *testing.T) {
 		{`/home/me/a+b&c=d.ts`, `/home/me/a+b&c=d.ts`},
 		{`/C:notes`, `/C:notes`},
 		{`/C:/project/a.ts`, `/C:/project/a.ts`},
+		{`/C:/my project/déjà.ts`, `/C:/my project/déjà.ts`},
 		{`C:\Users\me\a.ts`, `/mnt/c/Users/me/a.ts`},
 		{`\\wsl.localhost\Ubuntu\home\me\a.ts`, `/home/me/a.ts`},
 	}
