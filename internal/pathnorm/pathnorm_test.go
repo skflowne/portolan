@@ -33,6 +33,25 @@ func TestIsWindowsPath(t *testing.T) {
 	}
 }
 
+func TestCanonicalIdentityEquivalence(t *testing.T) {
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	for _, input := range []string{
+		`C:\Users\me\a.ts`,
+		`C:/Users/me/a.ts`,
+		`/mnt/c/Users/me/a.ts`,
+		`\\wsl$\Ubuntu\mnt\c\Users\me\a.ts`,
+		`\\wsl.localhost\Ubuntu\mnt\c\Users\me\a.ts`,
+	} {
+		got, err := Canonicalize(input)
+		if err != nil {
+			t.Fatalf("Canonicalize(%q): %v", input, err)
+		}
+		if got != `/mnt/c/Users/me/a.ts` {
+			t.Errorf("Canonicalize(%q) = %q, want %q", input, got, `/mnt/c/Users/me/a.ts`)
+		}
+	}
+}
+
 func TestCanonicalize(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -49,8 +68,10 @@ func TestCanonicalize(t *testing.T) {
 		{"canonical mount", `/mnt/c/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"uppercase mount drive", `/mnt/C/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl dollar UNC", `\\wsl$\Ubuntu\home\me\a.ts`, "Ubuntu", `/home/me/a.ts`},
+		{"wsl dollar UNC uppercase mount", `\\wsl$\Ubuntu\mnt\C\Users\me\a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl dollar UNC case insensitive distro", `\\WSL$\uBuNtU\home\me\a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"wsl localhost UNC", `\\wsl.localhost\Ubuntu\home\me\a.ts`, "Ubuntu", `/home/me/a.ts`},
+		{"wsl localhost UNC uppercase mount", `\\wsl.localhost\Ubuntu\mnt\C\Users\me\a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl localhost UNC case insensitive distro", `\\WSL.LOCALHOST\uBuNtU\home\me\a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"wsl UNC root", `\\wsl$\Ubuntu`, "Ubuntu", `/`},
 		{"wsl UNC mixed separators", `\\wsl$\Ubuntu/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
@@ -137,6 +158,7 @@ func TestNormalizeCompatibility(t *testing.T) {
 		`/home/me//a.ts`:             `/home/me/a.ts`,
 		`C:\Users\me\a.ts`:           `/mnt/c/Users/me/a.ts`,
 		`\\wsl$\Ubuntu\home\me\a.ts`: `/home/me/a.ts`,
+		`\\server\share\a.ts`:        `/server/share/a.ts`,
 	}
 	for input, want := range cases {
 		if got := Normalize(input); got != want {
@@ -246,8 +268,10 @@ func TestURIToPath(t *testing.T) {
 		{"escaped POSIX drive-looking name", `file:///%43%3A/project/a.ts`, "Ubuntu", `/C:/project/a.ts`},
 		{"localhost Windows drive", `file://localhost/C:/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl dollar authority", `file://wsl$/Ubuntu/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
+		{"wsl dollar authority uppercase mount", `file://wsl$/Ubuntu/mnt/C/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl dollar authority case insensitive", `file://WSL$/uBuNtU/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
 		{"wsl localhost authority", `file://wsl.localhost/Ubuntu/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
+		{"wsl localhost authority uppercase mount", `file://wsl.localhost/Ubuntu/mnt/C/Users/me/a.ts`, "Ubuntu", `/mnt/c/Users/me/a.ts`},
 		{"wsl localhost authority case insensitive", `file://WSL.LOCALHOST/uBuNtU/home/me/a.ts`, "Ubuntu", `/home/me/a.ts`},
 	}
 	for _, tc := range cases {
@@ -283,6 +307,8 @@ func TestURIToPathRejectsInvalidURIs(t *testing.T) {
 		{"query", `file:///home/me/a.ts?query`, "Ubuntu"},
 		{"fragment", `file:///home/me/a.ts#fragment`, "Ubuntu"},
 		{"decoded NUL", `file:///home/me/%00a.ts`, "Ubuntu"},
+		{"wsl dollar decoded NUL", `file://wsl$/Ubuntu/home/me/%00a.ts`, "Ubuntu"},
+		{"wsl localhost decoded NUL", `file://wsl.localhost/Ubuntu/home/me/%00a.ts`, "Ubuntu"},
 		{"wsl dollar missing distro", `file://wsl$/`, "Ubuntu"},
 		{"wsl localhost missing distro", `file://wsl.localhost/`, "Ubuntu"},
 		{"wsl dollar cross distro", `file://wsl$/Debian/home/me/a.ts`, "Ubuntu"},
