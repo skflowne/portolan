@@ -161,6 +161,8 @@ func TestWSLToWindows(t *testing.T) {
 		{"Windows input", `c:/Users/me\a.ts`, "", `C:\Users\me\a.ts`, false},
 		{"empty", ``, "", ``, true},
 		{"relative", `home/me/a.ts`, "Ubuntu", ``, true},
+		{"POSIX backslash", `/home/me/a\b.ts`, "Ubuntu", ``, true},
+		{"mounted POSIX backslash", `/mnt/c/a\b.ts`, "Ubuntu", ``, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

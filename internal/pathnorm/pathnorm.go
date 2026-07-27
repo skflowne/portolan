@@ -137,6 +137,9 @@ func WSLToWindows(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if strings.Contains(hostPath, `\`) {
+		return "", fmt.Errorf("pathnorm: cannot represent POSIX backslash in Windows path %q", hostPath)
+	}
 	if drive, rest, ok := splitMountDrive(hostPath); ok {
 		return strings.ToUpper(drive) + `:\` + strings.ReplaceAll(strings.TrimPrefix(rest, "/"), "/", `\`), nil
 	}
