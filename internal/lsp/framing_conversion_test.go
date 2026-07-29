@@ -109,22 +109,18 @@ func TestDocumentSymbolAdapterNormalizesWireValues(t *testing.T) {
 }
 
 func TestSymbolKindAdapterCoversLSPVocabulary(t *testing.T) {
-	want := []core.SymbolKind{
-		core.SymbolKindFile, core.SymbolKindModule, core.SymbolKindNamespace, core.SymbolKindPackage,
-		core.SymbolKindClass, core.SymbolKindMethod, core.SymbolKindProperty, core.SymbolKindField,
-		core.SymbolKindConstructor, core.SymbolKindEnum, core.SymbolKindInterface, core.SymbolKindFunction,
-		core.SymbolKindVariable, core.SymbolKindConstant, core.SymbolKindString, core.SymbolKindNumber,
-		core.SymbolKindBoolean, core.SymbolKindArray, core.SymbolKindObject, core.SymbolKindKey,
-		core.SymbolKindNull, core.SymbolKindEnumMember, core.SymbolKindStruct, core.SymbolKindEvent,
-		core.SymbolKindOperator, core.SymbolKindTypeParameter,
+	want := []string{
+		"file", "module", "namespace", "package", "class", "method", "property", "field", "constructor",
+		"enum", "interface", "function", "variable", "constant", "string", "number", "boolean", "array",
+		"object", "key", "null", "enummember", "struct", "event", "operator", "typeparameter",
 	}
 	for i, expected := range want {
-		if got := symbolKindName(i + 1); got != expected {
+		if got := symbolKindName(i + 1); string(got) != expected {
 			t.Errorf("symbolKindName(%d) = %q, want %q", i+1, got, expected)
 		}
 	}
 	for _, unknown := range []int{0, 27, 999} {
-		if got := symbolKindName(unknown); got != core.SymbolKindUnknown {
+		if got := symbolKindName(unknown); string(got) != "unknown" {
 			t.Errorf("symbolKindName(%d) = %q, want unknown", unknown, got)
 		}
 	}
