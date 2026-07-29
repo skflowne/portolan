@@ -1,0 +1,5 @@
+{
+  "worktree": {
+    "setup": "command -v codegraph >/dev/null 2>&1 || { echo \"CodeGraph is required for Paseo worktrees; install it before creating a workspace\" >&2; exit 1; }\nCODEGRAPH_TELEMETRY=0 codegraph init"
+  }
+}
