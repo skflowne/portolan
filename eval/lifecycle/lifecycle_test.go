@@ -39,6 +39,7 @@ func newDaemon(t *testing.T, socket string) *testinfra.Daemon {
 		Binary:        daemonBin,
 		ProjectRoot:   testinfra.FixtureRoot(),
 		SessionID:     "lifecycle",
+		GraphMode:     "graph",
 		ControlSocket: socket,
 	})
 }

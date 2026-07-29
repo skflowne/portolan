@@ -60,6 +60,7 @@ func startTelemetryDaemon(t *testing.T, endpoint string) (*testinfra.Daemon, *mc
 		ProjectRoot:   testinfra.FixtureRoot(),
 		Telemetry:     jsonl,
 		SessionID:     "telemetry-integration",
+		GraphMode:     "no-graph",
 		ControlSocket: filepath.Join(dir, "control.sock"),
 		Env: map[string]string{
 			"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": endpoint,
@@ -144,7 +145,7 @@ func TestDaemonOTLPHTTPPreservesJSONLAndMCPStdout(t *testing.T) {
 	stopTelemetryDaemon(t, d, sess)
 
 	event := readExactTelemetryEvent(t, jsonl)
-	if event["tool"] != "get_outline" || event["session_id"] != "telemetry-integration" || event["graph_mode"] != "graph" {
+	if event["tool"] != "get_outline" || event["session_id"] != "telemetry-integration" || event["graph_mode"] != "no-graph" {
 		t.Fatalf("wrong JSONL event: %v", event)
 	}
 	select {
