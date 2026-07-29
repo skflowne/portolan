@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,156 @@ func rng(sl, sc, el, ec int) core.Range {
 
 func newTestTools(provider core.LanguageProvider, logger *capturingLogger, cfg core.Config) *Tools {
 	return New(provider, &core.GenerationCounter{}, logger, cfg)
+}
+
+type fileCallResult struct {
+	found     bool
+	resultLen int
+	truncated bool
+	freshness core.Freshness
+	message   string
+	errorText string
+	err       error
+}
+
+type fileToolCase struct {
+	name string
+	call func(context.Context, *Tools, string) fileCallResult
+}
+
+func fileToolCases() []fileToolCase {
+	return []fileToolCase{
+		{
+			name: "find_definition",
+			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
+				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, err}
+			},
+		},
+		{
+			name: "find_references",
+			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
+				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, err}
+			},
+		},
+		{
+			name: "get_outline",
+			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
+				out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
+				return fileCallResult{out.Found, len(out.Symbols), out.Truncated, out.Freshness, out.Message, out.Error, err}
+			},
+		},
+	}
+}
+
+func TestToolsRejectInvalidFileBeforeProviderWork(t *testing.T) {
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	invalid := []struct {
+		name string
+		file string
+	}{
+		{name: "empty"},
+		{name: "relative", file: "repo/main.go"},
+		{name: "bare_drive", file: `C:`},
+		{name: "malformed_unc", file: `\\`},
+		{name: "unsupported_unc", file: `\\server\share\main.go`},
+		{name: "cross_distro", file: `\\wsl$\Debian\repo\main.go`},
+		{name: "nul", file: "/repo/\x00main.go"},
+	}
+
+	for _, tool := range fileToolCases() {
+		for _, input := range invalid {
+			t.Run(tool.name+"/"+input.name, func(t *testing.T) {
+				provider := &fileRecordingProvider{}
+				logger := &capturingLogger{}
+				gen := &core.GenerationCounter{}
+				gen.Bump()
+				tl := New(provider, gen, logger, core.Config{})
+
+				got := tool.call(context.Background(), tl, input.file)
+				if got.err != nil {
+					t.Fatalf("tool returned Go error: %v", got.err)
+				}
+				if got.found || got.resultLen != 0 || got.truncated {
+					t.Fatalf("partial result: found=%v len=%d truncated=%v", got.found, got.resultLen, got.truncated)
+				}
+				if got.errorText == "" || got.message == "" {
+					t.Fatalf("failure error=%q message=%q, want both populated", got.errorText, got.message)
+				}
+				if input.file != "" && (strings.Contains(got.errorText, input.file) || strings.Contains(got.message, input.file)) {
+					t.Fatalf("failure exposed raw file %q: error=%q message=%q", input.file, got.errorText, got.message)
+				}
+				if got.freshness.Generation != 1 || got.freshness.Stale {
+					t.Fatalf("freshness = %+v, want generation 1 and not stale", got.freshness)
+				}
+				if calls := provider.files(); len(calls) != 0 {
+					t.Fatalf("provider files = %q, want no calls", calls)
+				}
+				if logger.count() != 1 {
+					t.Fatalf("telemetry events = %d, want 1", logger.count())
+				}
+				ev, _ := logger.last()
+				if ev.Err != got.errorText || ev.ResultSize != 0 || ev.Truncated || ev.Generation != 1 || ev.Stale {
+					t.Fatalf("telemetry event = %+v, output error=%q", ev, got.errorText)
+				}
+			})
+		}
+	}
+}
+
+func TestToolsCanonicalizeEquivalentFileInputs(t *testing.T) {
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	inputs := []string{
+		`C:\repo\main.go`,
+		"/mnt/c/repo/main.go",
+		`\\wsl.localhost\Ubuntu\mnt\c\repo\main.go`,
+	}
+	const canonical = "/mnt/c/repo/main.go"
+
+	for _, tool := range fileToolCases() {
+		for _, input := range inputs {
+			t.Run(tool.name+"/"+input, func(t *testing.T) {
+				provider := &fileRecordingProvider{symbols: true}
+				got := tool.call(context.Background(), newTestTools(provider, &capturingLogger{}, core.Config{}), input)
+				if got.err != nil || got.errorText != "" || !got.found {
+					t.Fatalf("result = %+v, want successful found result", got)
+				}
+				for i, file := range provider.files() {
+					if file != canonical {
+						t.Fatalf("provider file %d = %q, want %q", i+1, file, canonical)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestToolsUseCanonicalFileInEmptyMessages(t *testing.T) {
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	inputs := []string{
+		`C:\repo\empty.go`,
+		"/mnt/c/repo/empty.go",
+		`\\wsl$\Ubuntu\mnt\c\repo\empty.go`,
+	}
+	const canonical = "/mnt/c/repo/empty.go"
+
+	for _, tool := range fileToolCases() {
+		for _, input := range inputs {
+			t.Run(tool.name+"/"+input, func(t *testing.T) {
+				got := tool.call(context.Background(), newTestTools(&fileRecordingProvider{}, &capturingLogger{}, core.Config{}), input)
+				if got.err != nil || got.errorText != "" || got.found {
+					t.Fatalf("result = %+v, want honest empty result", got)
+				}
+				if !strings.Contains(got.message, canonical) {
+					t.Fatalf("message = %q, want canonical file %q", got.message, canonical)
+				}
+				if input != canonical && strings.Contains(got.message, input) {
+					t.Fatalf("message = %q, must not expose raw file %q", got.message, input)
+				}
+			})
+		}
+	}
 }
 
 func TestFindDefinition_ResolvesByNameAndPosition(t *testing.T) {
@@ -718,6 +869,44 @@ type toolCallResult struct {
 	err     error
 }
 
+type fileRecordingProvider struct {
+	mu      sync.Mutex
+	records []string
+	symbols bool
+}
+
+func (p *fileRecordingProvider) record(file string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.records = append(p.records, file)
+}
+
+func (p *fileRecordingProvider) files() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.records...)
+}
+
+func (p *fileRecordingProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
+	p.record(file)
+	return []core.Location{{File: file}}, nil
+}
+
+func (p *fileRecordingProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
+	p.record(file)
+	return []core.Location{{File: file}}, nil
+}
+
+func (p *fileRecordingProvider) DocumentSymbols(_ context.Context, file string) ([]core.Symbol, error) {
+	p.record(file)
+	if !p.symbols {
+		return nil, nil
+	}
+	return []core.Symbol{{Name: "Target", File: file}}, nil
+}
+
+func (p *fileRecordingProvider) Close() error { return nil }
+
 type contextRecordingProvider struct {
 	mu      sync.Mutex
 	file    string
@@ -860,6 +1049,7 @@ func (p *blockingProvider) secondStageCalls() int {
 
 func (p *blockingProvider) Close() error { return nil }
 
+var _ core.LanguageProvider = (*fileRecordingProvider)(nil)
 var _ core.LanguageProvider = (*contextRecordingProvider)(nil)
 var _ core.LanguageProvider = (*cancelingResultProvider)(nil)
 var _ core.LanguageProvider = (*blockingProvider)(nil)
