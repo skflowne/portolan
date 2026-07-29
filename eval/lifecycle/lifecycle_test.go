@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -111,6 +112,63 @@ func requireSuccessfulExit(t *testing.T, d *testinfra.Daemon, trigger string, st
 	if elapsed := time.Since(started); elapsed > testinfra.ShortWait {
 		t.Fatalf("%s shutdown took too long: %v", trigger, elapsed)
 	}
+}
+
+func TestDaemonRejectsInvalidTelemetryDimensionsBeforeRuntimeConstruction(t *testing.T) {
+	testinfra.RequireSupport(t)
+	tests := []struct {
+		name      string
+		dimension []string
+		wantError string
+	}{
+		{name: "graph mode", dimension: []string{"--session-id", "lifecycle", "--graph-mode", "invalid"}, wantError: "--graph-mode"},
+		{name: "session ID", dimension: []string{"--session-id=", "--graph-mode", "graph"}, wantError: "--session-id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "tsgo-started")
+			wrapper := filepath.Join(dir, "tsgo-wrapper.sh")
+			if err := os.WriteFile(wrapper, []byte("#!/bin/sh\ntouch \"$PORTOLAN_START_MARKER\"\nexit 1\n"), 0o755); err != nil {
+				t.Fatalf("writing tsgo marker wrapper: %v", err)
+			}
+			telemetryPath := filepath.Join(dir, "telemetry.jsonl")
+			socketPath := filepath.Join(dir, "control.sock")
+			args := []string{
+				"--project-root", testinfra.FixtureRoot(),
+				"--jsonl", telemetryPath,
+				"--control-socket", socketPath,
+				"--tsgo", wrapper,
+			}
+			args = append(args, tt.dimension...)
+			cmd := exec.Command(daemonBin, args...)
+			cmd.Env = append(environmentWithoutTelemetryDimensions(), "PORTOLAN_START_MARKER="+marker)
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("daemon accepted invalid telemetry dimensions: %s", output)
+			}
+			if !strings.Contains(string(output), tt.wantError) {
+				t.Fatalf("startup error %q does not identify %s", output, tt.wantError)
+			}
+			for _, path := range []string{marker, telemetryPath, socketPath} {
+				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+					t.Errorf("runtime artifact %s exists after configuration rejection: %v", path, statErr)
+				}
+			}
+		})
+	}
+}
+
+func environmentWithoutTelemetryDimensions() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "PORTOLAN_SESSION_ID" && key != "PORTOLAN_GRAPH_MODE" {
+			env = append(env, entry)
+		}
+	}
+	return env
 }
 
 func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {

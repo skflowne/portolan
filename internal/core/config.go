@@ -1,6 +1,11 @@
 package core
 
-import "sync/atomic"
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync/atomic"
+)
 
 // Config is the daemon's runtime configuration, assembled in cmd/portoland from
 // flags and environment. It is passed by value to constructors.
@@ -29,9 +34,35 @@ type Config struct {
 	MaxResults int
 }
 
-// DefaultMaxResults is the cap applied when Config.MaxResults is 0. Every
-// list-returning tool paginates/caps — never dump an unbounded result.
-const DefaultMaxResults = 100
+const (
+	// GraphModeGraph enables graph-backed navigation during an evaluation.
+	GraphModeGraph = "graph"
+	// GraphModeNoGraph identifies the graph-disabled evaluation control.
+	GraphModeNoGraph = "no-graph"
+	// DefaultGraphMode is used when no graph mode flag or environment value is supplied.
+	DefaultGraphMode = GraphModeGraph
+
+	// DefaultMaxResults is the cap applied when Config.MaxResults is 0. Every
+	// list-returning tool paginates/caps — never dump an unbounded result.
+	DefaultMaxResults = 100
+)
+
+var (
+	ErrInvalidSessionID = errors.New("invalid telemetry session ID")
+	ErrInvalidGraphMode = errors.New("invalid telemetry graph mode")
+)
+
+// ValidateTelemetryDimensions rejects configuration that cannot produce
+// authoritative telemetry correlation fields.
+func (c Config) ValidateTelemetryDimensions() error {
+	if strings.TrimSpace(c.SessionID) == "" {
+		return fmt.Errorf("%w: value must not be empty or whitespace", ErrInvalidSessionID)
+	}
+	if c.GraphMode != GraphModeGraph && c.GraphMode != GraphModeNoGraph {
+		return fmt.Errorf("%w %q: accepted values are %q and %q", ErrInvalidGraphMode, c.GraphMode, GraphModeGraph, GraphModeNoGraph)
+	}
+	return nil
+}
 
 // Cap returns the effective result cap.
 func (c Config) Cap() int {
