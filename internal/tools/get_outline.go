@@ -69,13 +69,13 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			return
 		}
 
-		flat, truncated, err := flattenSymbols(ctx, symbols, t.Cfg.Cap())
+		flat, err := flattenSymbols(ctx, symbols, t.Cfg.Cap())
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
 			return
 		}
-		signatures, err := t.Provider.SymbolSignatures(ctx, file, signatureSymbols(flat))
+		signatures, err := t.Provider.SymbolSignatures(ctx, file, flat.originals)
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -84,18 +84,18 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = fmt.Sprintf("failed to load symbol signatures for %s", file)
 			return
 		}
-		if len(signatures) != len(flat) {
-			out.Error = fmt.Sprintf("provider returned %d signatures for %d symbols", len(signatures), len(flat))
+		if len(signatures) != len(flat.outline) {
+			out.Error = fmt.Sprintf("provider returned %d signatures for %d symbols", len(signatures), len(flat.outline))
 			out.Message = fmt.Sprintf("failed to load symbol signatures for %s", file)
 			return
 		}
-		for i := range flat {
-			flat[i].Signature = signatures[i]
+		for i := range flat.outline {
+			flat.outline[i].Signature = signatures[i]
 		}
 
 		out.Found = true
-		out.Symbols = flat
-		out.Truncated = truncated
+		out.Symbols = flat.outline
+		out.Truncated = flat.truncated
 	})
 	return out, nil
 }
@@ -108,39 +108,33 @@ func (o *GetOutlineOutput) telemetryFields() (int, bool, string) {
 	return len(o.Symbols), o.Truncated, o.Error
 }
 
-func signatureSymbols(symbols []OutlineSymbol) []core.Symbol {
-	refs := make([]core.Symbol, len(symbols))
-	for i, symbol := range symbols {
-		refs[i] = core.Symbol{
-			Name:      symbol.Name,
-			Kind:      symbol.Kind,
-			File:      symbol.File,
-			Range:     symbol.Range,
-			SelRange:  symbol.SelRange,
-			Signature: symbol.Signature,
-			Detail:    symbol.Detail,
-		}
-	}
-	return refs
+type flattenedSymbols struct {
+	outline   []OutlineSymbol
+	originals []core.Symbol
+	truncated bool
 }
 
 // flattenSymbols walks symbols depth-first and stops once it can prove the
 // configured result cap is truncated.
-func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) ([]OutlineSymbol, bool, error) {
+func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) (flattenedSymbols, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return flattenedSymbols{}, err
 	}
-	out := make([]OutlineSymbol, 0, min(len(symbols), cap))
+	flat := flattenedSymbols{
+		outline:   make([]OutlineSymbol, 0, min(len(symbols), cap)),
+		originals: make([]core.Symbol, 0, min(len(symbols), cap)),
+	}
 	var walk func([]core.Symbol, int) (bool, error)
 	walk = func(syms []core.Symbol, depth int) (bool, error) {
-		for _, s := range syms {
+		for i := range syms {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
-			if len(out) == cap {
+			if len(flat.outline) == cap {
 				return true, nil
 			}
-			out = append(out, OutlineSymbol{
+			s := syms[i]
+			flat.outline = append(flat.outline, OutlineSymbol{
 				Name:      s.Name,
 				Kind:      s.Kind,
 				File:      s.File,
@@ -150,6 +144,7 @@ func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) ([]Outl
 				Detail:    s.Detail,
 				Depth:     depth,
 			})
+			flat.originals = append(flat.originals, s)
 			if len(s.Children) > 0 {
 				truncated, err := walk(s.Children, depth+1)
 				if err != nil || truncated {
@@ -161,7 +156,8 @@ func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) ([]Outl
 	}
 	truncated, err := walk(symbols, 0)
 	if err != nil {
-		return nil, false, err
+		return flattenedSymbols{}, err
 	}
-	return out, truncated, nil
+	flat.truncated = truncated
+	return flat, nil
 }
