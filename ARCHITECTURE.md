@@ -4,10 +4,10 @@ Visual companion to `PLAN.md` (the *how* and the *order*), `INTEGRATION_CONSTRAI
 (decisions), and `EVAL.md` (measurement). Diagrams are [Mermaid](https://mermaid.js.org/) and
 render natively on GitHub.
 
-**One sentence:** a long-lived **Go daemon** (`portoland`) exposes an always-fresh, LSP-derived
-code graph to a coding agent through **two faces on one process** — MCP tools for the model, and a
-control socket for the harness's edit-sync barrier — so the agent navigates code by typed graph
-lookup instead of grep.
+**One sentence:** a long-lived **Go daemon** (`portoland`) exposes an LSP-derived code graph to a
+coding agent through **two faces on one process** — MCP tools for the model, and a control socket
+whose current generation-bump scaffold becomes the harness's blocking edit-sync barrier in Phase 1
+— so the agent navigates code by typed graph lookup instead of grep.
 
 ---
 
@@ -21,13 +21,13 @@ flowchart TB
     subgraph Harness["Harness adapter — Claude Code first (Pi later)"]
         direction TB
         Model["Model loop<br/>built-in Grep · Read · Edit"]
-        Hooks["Hooks<br/>SessionStart · PostToolUse"]
+        Hooks["Hooks<br/>SessionStart · PostToolUse<br/>(Phase 1+ target)"]
     end
 
     subgraph Daemon["portoland — Go daemon (portable core)"]
         direction TB
         MCP["MCP server<br/>(stdio)"]
-        Ctl["Control socket<br/>(project-keyed)"]
+        Ctl["Control socket<br/>(project-keyed)<br/>Phase 0 generation scaffold"]
         Tools["Tools layer<br/>find_definition · find_references · get_outline"]
         Gen["GenerationCounter<br/>freshness source"]
         Prov{{"LanguageProvider<br/>(interface)"}}
@@ -43,7 +43,7 @@ flowchart TB
     Stderr[["stderr diagnostics"]]
 
     Model -->|"(1) MCP tool calls"| MCP
-    Hooks -->|"(2) 'file X changed: sync + wait'"| Ctl
+    Hooks -.->|"(2) Phase 1 target:<br/>'file X changed: sync + wait'"| Ctl
     MCP --> Tools
     Tools --> Path
     Tools --> Gen
@@ -52,20 +52,24 @@ flowchart TB
     Prov -. implemented by .-> LSP
     LSP <-->|"LSP JSON-RPC<br/>Content-Length framing"| Tsgo
     Tsgo -.reads.-> Files
-    Ctl --> Gen
+    Ctl -->|"current: sync command<br/>bumps generation only"| Gen
     Tel --> JSONL
     Tel -. independent bounded mirror .-> OTLP
     Tel -. failures and loss .-> Stderr
 
     classDef built fill:#1f6f43,stroke:#0f3,color:#fff;
     classDef scaffold fill:#7a5c00,stroke:#fc0,color:#fff;
-    class Model,Hooks,MCP,Tools,Gen,Prov,LSP,Path,Tel,Tsgo,JSONL,OTLP,Stderr built;
+    classDef future fill:#334e68,stroke:#9fb3c8,color:#fff,stroke-dasharray: 5 5;
+    class Model,MCP,Tools,Gen,Prov,LSP,Path,Tel,Tsgo,JSONL,OTLP,Stderr built;
     class Ctl scaffold;
+    class Hooks future;
 ```
 
-**Legend:** green = implemented in Phase 0 · amber = Phase 0 *scaffold* (real socket + protocol, but
-the blocking barrier logic lands in Phase 1). The materialized graph index (PageRank repo-map,
-blast-radius) is deliberately **not** here yet — it enters at Phase 2.
+**Legend:** green = implemented in Phase 0 · amber = Phase 0 *scaffold* (the real socket accepts
+`sync <file>` and bumps the shared generation only) · blue dashed = target behavior not yet
+implemented. There is currently no blocking hook, LSP `didChange`/`didSave`, or settle detection.
+Those land in Phase 1. The materialized graph index (PageRank repo-map, blast-radius) is deliberately
+**not** here yet — it enters at Phase 2.
 
 **Control-socket lifecycle:** each daemon holds an advisory lock in a private per-user runtime
 directory for the listener lifetime. Socket directories must be user-owned and non-writable by
@@ -156,12 +160,13 @@ server-response budget, so they cannot stall response demultiplexing.
 
 ---
 
-## 3. The staleness barrier (Phase 1 — the hard core)
+## 3. The staleness barrier (Phase 1 target — the hard core)
 
-In TS 7 *all* languages (including TS) are analyzed out-of-process via LSP, so there is no
-in-process freshness freebie. The barrier makes edits deterministically visible before the model's
-next turn. Phase 0 ships the socket + generation plumbing; Phase 1 makes `PostToolUse` **blocking**
-and adds settle detection.
+This sequence is the **target state, not current Phase 0 behavior**. In TS 7 *all* languages
+(including TS) are analyzed out-of-process via LSP, so there is no in-process freshness freebie. The
+barrier will make edits deterministically visible before the model's next turn. Phase 0 ships only
+the socket + generation-bump plumbing; Phase 1 adds the hook, LSP edit notifications, blocking wait,
+and settle detection.
 
 ```mermaid
 sequenceDiagram
@@ -172,6 +177,7 @@ sequenceDiagram
     participant D as Daemon
     participant G as tsgo LSP
 
+    Note over M,G: Phase 1 target — not implemented in Phase 0
     M->>M: Edit / Write a file
     Note over M,H: model's turn CANNOT continue
     H->>C: sync <file>
@@ -238,8 +244,8 @@ OTLP/HTTP only when a standard OTLP endpoint is explicitly configured.
 
 ```mermaid
 flowchart LR
-    P0["Phase 0 ✅<br/>walking skeleton<br/>+ telemetry spine<br/>+ Tier A scaffold"]
-    P1["Phase 1<br/>staleness barrier<br/>+ freshness<br/>+ Tier A live"]
+    P0["Phase 0 ✅<br/>walking skeleton<br/>+ generation-bump scaffold<br/>+ telemetry spine · Tier A"]
+    P1["Phase 1 target<br/>blocking staleness barrier<br/>+ freshness · Tier A stale checks"]
     P2["Phase 2<br/>materialized graph<br/>+ PageRank repo-map<br/>+ Tier B signal"]
     P3["Phase 3<br/>more tools + languages<br/>(pyright, gopls, rust-analyzer)<br/>+ Tier C"]
     P4["Phase 4<br/>hardening<br/>+ Pi adapter"]
