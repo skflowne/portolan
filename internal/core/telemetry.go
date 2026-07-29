@@ -2,10 +2,8 @@ package core
 
 import "context"
 
-// Event is one telemetry record. The telemetry spine (internal/telemetry)
-// writes it to a JSONL stream and mirrors it to OTEL. Every tool invocation
-// emits exactly one Event so the eval harness can join tokens-to-answer by
-// session_id and slice by graph_mode.
+// Event records one tool invocation. SessionID and GraphMode correlate events
+// with the caller and its configured graph mode.
 //
 // Timestamp is filled in by the Logger implementation (do not set it at the
 // call site) so all records share one clock.

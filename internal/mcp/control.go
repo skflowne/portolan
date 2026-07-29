@@ -15,8 +15,8 @@ import (
 // ControlSocket accepts newline-delimited control commands over a Unix socket
 // and sends newline-delimited responses. Its wire contract is:
 //
-//	sync <file>   -> bumps the shared GenerationCounter, replies "ok generation=<n>\n"
-//	<anything else> -> replies "err unknown\n"
+//	sync [arguments...] -> bumps the shared GenerationCounter, replies "ok generation=<n>\n"
+//	<anything else>     -> replies "err unknown\n"
 type ControlSocket struct {
 	path string
 	gen  *core.GenerationCounter

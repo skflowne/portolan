@@ -11,9 +11,8 @@
 //     results) is an honest, non-error result: Found=false with a clear
 //     Message, never a Go error
 //   - a provider error is a soft failure: it is surfaced in the Event (Err)
-//     and in the output's Error field, and the method still returns (out, nil)
-//     — callers (notably the MCP layer) never need to translate a Go error
-//     into a tool-level failure for this case, and the process never panics
+//     and in the output's Error field, and the method still returns (out, nil),
+//     preserving the tool-level result contract without panicking
 package tools
 
 import (
