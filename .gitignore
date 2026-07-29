@@ -1,6 +1,7 @@
 node_modules/
 dist/
 target/
+/.codegraph/
 .env
 *.log
 .DS_Store
