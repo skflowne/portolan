@@ -32,7 +32,7 @@ flowchart TB
         Gen["GenerationCounter<br/>freshness source"]
         Prov{{"LanguageProvider<br/>(interface)"}}
         LSP["lsp.Provider<br/>tsgo --lsp client"]
-        Path["pathnorm<br/>WSL ↔ Windows"]
+        Path["pathnorm<br/>canonical host paths · strict file-URI codec"]
         Tel["telemetry<br/>bounded JSONL · opt-in OTLP/HTTP"]
     end
 
@@ -50,6 +50,7 @@ flowchart TB
     Tools --> Prov
     Tools --> Tel
     Prov -. implemented by .-> LSP
+    LSP --> Path
     LSP <-->|"LSP JSON-RPC<br/>Content-Length framing"| Tsgo
     Tsgo -.reads.-> Files
     Ctl --> Gen
@@ -197,15 +198,15 @@ on how to react to `stale: true`. Never hang the model — bounded waits, then r
 
 ## 4. Package dependency graph (Phase 0)
 
-`internal/core` is the frozen center; everything depends inward on it and nothing on each other
-(except the daemon and eval, which wire the pieces together). This is exactly what let the four
-implementation packages be built in parallel.
+`internal/core` is the stable cross-package contract center, while `internal/pathnorm` owns shared
+canonical host-path and file-URI identity. Provider and tool packages depend on those foundational
+owners; the daemon and eval packages wire the implementations together.
 
 ```mermaid
 flowchart LR
     core["internal/core<br/>contracts: LanguageProvider,<br/>Event/Logger, Config, StubProvider"]
     lsp["internal/lsp<br/>tsgo client"]
-    path["internal/pathnorm<br/>(stdlib only)"]
+    path["internal/pathnorm<br/>canonical paths · file-URI codec<br/>(stdlib only)"]
     tel["internal/telemetry"]
     tools["internal/tools"]
     mcp["internal/mcp"]
@@ -215,6 +216,7 @@ flowchart LR
     testinfra["eval/testinfra<br/>(shared real-daemon harness)"]
 
     lsp --> core
+    lsp --> path
     tel --> core
     tools --> core
     tools --> path

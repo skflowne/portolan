@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -148,6 +149,50 @@ func TestReferences(t *testing.T) {
 	if !foundUse {
 		t.Errorf("expected use-site reference in %s, got %+v", bFile, locs)
 	}
+}
+
+func TestDefinitionPreservesEscapedCanonicalPathOverLSP(t *testing.T) {
+	if _, err := exec.LookPath("tsgo"); err != nil {
+		t.Skip("tsgo not found on PATH; skipping LSP integration test")
+	}
+
+	root := filepath.Join(t.TempDir(), "project space ☃")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	files := map[string]string{
+		"a.ts":          "export function greet(name: string): string {\n  return name;\n}\n",
+		"b.ts":          "import { greet } from \"./a\";\n\nexport const result = greet(\"World\");\n",
+		"tsconfig.json": `{"compilerOptions":{"strict":true,"noEmit":true},"include":["*.ts"]}`,
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	p, err := New(core.Config{ProjectRoot: root + "/./"})
+	if err != nil {
+		t.Fatalf("lsp.New: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Errorf("Provider.Close: %v", err)
+		}
+	})
+
+	bFile := filepath.Join(root, "nested", "..", "b.ts")
+	locations, err := p.Definition(testCtx(t), bFile, core.Position{Line: 2, Character: 24})
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	wantFile := filepath.Join(root, "a.ts")
+	for _, location := range locations {
+		if location.File == wantFile && location.Range.Start.Line == 0 {
+			return
+		}
+	}
+	t.Fatalf("expected canonical definition in %q, got %+v", wantFile, locations)
 }
 
 // TestDefinitionNoResult asserts the "honest null" contract: querying a
