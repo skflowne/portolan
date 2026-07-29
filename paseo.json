@@ -1,0 +1,25 @@
+{
+  "worktree": {
+    "setup": [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "# 1. Toolchain preconditions from AGENTS.md — fail loud, don't half-set-up a worktree.",
+      "command -v go >/dev/null || { echo \"go not on PATH\"; exit 1; }",
+      "go version | grep -qE 'go1\\.(2[6-9]|[3-9][0-9])' || { echo \"need Go 1.26+, got $(go version)\"; exit 1; }",
+      "# tsgo is a *global* npm install; nvm's shims are often absent in non-login shells.",
+      "if ! command -v tsgo >/dev/null; then",
+      "  export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\"",
+      "  # shellcheck disable=SC1091",
+      "  [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"",
+      "fi",
+      "command -v tsgo >/dev/null || npm i -g @typescript/native-preview",
+      "tsgo --version >/dev/null || { echo \"tsgo unusable; internal/lsp + Tier A will SKIP\"; exit 1; }",
+      "# 2. Module + build cache are shared globally, so this is a near no-op on warm machines",
+      "#    and the only real fetch step on a cold one.",
+      "go mod download",
+      "# 3. Warm compile so the first agent command in the worktree isn't a 60s build.",
+      "go build ./...",
+      "go vet ./..."
+    ]
+  }
+}
