@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -659,9 +660,15 @@ func TestGetOutline_CapsFlattenedList(t *testing.T) {
 
 func TestGetOutlineRequestsSignaturesOnlyForCappedSymbols(t *testing.T) {
 	file := "/repo/big.go"
-	var symbols []core.Symbol
-	for i := 0; i < 5; i++ {
-		symbols = append(symbols, core.Symbol{Name: fmt.Sprintf("S%d", i), Kind: "function", File: file, SelRange: rng(i, 0, i, 1)})
+	symbols := []core.Symbol{
+		{
+			Name: "Container", Kind: "class", File: file, SelRange: rng(0, 0, 0, 9),
+			Children: []core.Symbol{
+				{Name: "First", Kind: "method", File: file, SelRange: rng(1, 0, 1, 5)},
+				{Name: "Second", Kind: "method", File: file, SelRange: rng(2, 0, 2, 6)},
+			},
+		},
+		{Name: "Trailing", Kind: "function", File: file, SelRange: rng(3, 0, 3, 8)},
 	}
 	provider := &signatureResultProvider{StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: symbols}}}
 	tl := newTestTools(provider, &capturingLogger{}, core.Config{MaxResults: 2})
@@ -670,8 +677,12 @@ func TestGetOutlineRequestsSignaturesOnlyForCappedSymbols(t *testing.T) {
 	if err != nil || out.Error != "" {
 		t.Fatalf("GetOutline = (%+v, %v)", out, err)
 	}
-	if len(provider.got) != 2 || provider.got[0].Name != "S0" || provider.got[1].Name != "S1" {
-		t.Fatalf("signature symbols = %+v, want capped depth-first output", provider.got)
+	want := []core.Symbol{symbols[0], symbols[0].Children[0]}
+	if !reflect.DeepEqual(provider.got, want) {
+		t.Fatalf("signature symbols = %+v, want exact capped originals %+v", provider.got, want)
+	}
+	if !out.Truncated {
+		t.Fatal("Truncated = false, want true when cap cuts through nested symbols")
 	}
 }
 
@@ -992,8 +1003,9 @@ func TestTreeTransformsHonorContext(t *testing.T) {
 	})
 	t.Run("flatten", func(t *testing.T) {
 		ctx := newCancelOnCheckContext(4)
-		if out, truncated, err := flattenSymbols(ctx, symbols, 10); !errors.Is(err, context.Canceled) || out != nil || truncated {
-			t.Fatalf("flattenSymbols = (%v, %v, %v), want no partial output and context canceled", out, truncated, err)
+		flat, err := flattenSymbols(ctx, symbols, 10)
+		if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(flat, flattenedSymbols{}) {
+			t.Fatalf("flattenSymbols = (%+v, %v), want no partial output and context canceled", flat, err)
 		}
 	})
 }
@@ -1005,12 +1017,16 @@ func TestOutlineTraversalStopsAtResultCap(t *testing.T) {
 	}
 	ctx := &countingContext{Context: context.Background()}
 
-	out, truncated, err := flattenSymbols(ctx, symbols, 2)
+	flat, err := flattenSymbols(ctx, symbols, 2)
 	if err != nil {
 		t.Fatalf("flattenSymbols: %v", err)
 	}
-	if !truncated || len(out) != 2 || out[0].Name != "Symbol0" || out[1].Name != "Symbol1" {
-		t.Fatalf("flattened output = %+v truncated=%v", out, truncated)
+	if !flat.truncated || len(flat.outline) != 2 || flat.outline[0].Name != "Symbol0" || flat.outline[1].Name != "Symbol1" {
+		t.Fatalf("flattened output = %+v", flat)
+	}
+	wantOriginals := symbols[:2]
+	if !reflect.DeepEqual(flat.originals, wantOriginals) {
+		t.Fatalf("original symbols = %+v, want %+v", flat.originals, wantOriginals)
 	}
 	if ctx.checks != 4 {
 		t.Fatalf("context checks = %d, want setup plus 3 nodes visited to prove truncation", ctx.checks)
