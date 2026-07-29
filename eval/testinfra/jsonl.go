@@ -16,6 +16,7 @@ func WaitForQuiescentJSONL(path string, expected int, timeout, quiet time.Durati
 	deadline := time.Now().Add(timeout)
 	var stable []byte
 	var stableSince time.Time
+	var candidateObserved bool
 	lastState := "file not created"
 	for {
 		data, err := os.ReadFile(path)
@@ -30,16 +31,19 @@ func WaitForQuiescentJSONL(path string, expected int, timeout, quiet time.Durati
 			switch {
 			case !complete:
 				lastState = "unterminated final record"
+				candidateObserved = false
 				stable = nil
 			case len(records) > expected:
 				return nil, fmt.Errorf("JSONL %s has %d records, want exactly %d", path, len(records), expected)
 			case len(records) < expected:
 				lastState = fmt.Sprintf("%d records, want exactly %d", len(records), expected)
+				candidateObserved = false
 				stable = nil
 			default:
-				if !bytes.Equal(stable, data) {
+				if !candidateObserved || !bytes.Equal(stable, data) {
 					stable = append(stable[:0], data...)
 					stableSince = time.Now()
+					candidateObserved = true
 				} else if time.Since(stableSince) >= quiet {
 					return records, nil
 				}
