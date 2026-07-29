@@ -111,7 +111,7 @@ func TestSignatureAndDocumentSymbolDetailRemainDistinct(t *testing.T) {
 	plans := []signaturePlan{{position: symbols[0].SelRange.Start}}
 	signatures, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, func(context.Context, string, any) (json.RawMessage, error) {
 		return json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\nfunction documented(): number\\n```\"}}"), nil
-	})
+	}, decodeHoverSignature)
 	if err != nil {
 		t.Fatalf("requestSignatures: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, request)
+		_, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, request, decodeHoverSignature)
 		result <- err
 	}()
 	select {
@@ -210,6 +210,101 @@ func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
 	}
 }
 
+func TestRequestSignaturesReturnsBeforeLateDecode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	exited := make(chan struct{})
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-exited:
+		case <-time.After(time.Second):
+			t.Error("late hover decoder did not exit")
+		}
+	}()
+
+	decode := func(json.RawMessage) (string, error) {
+		close(entered)
+		defer close(exited)
+		<-release
+		return "late signature", nil
+	}
+	type signatureResult struct {
+		signatures []string
+		err        error
+	}
+	result := make(chan signatureResult, 1)
+	go func() {
+		signatures, err := requestSignatures(ctx, "file:///repo/a.ts", []signaturePlan{{}}, func(context.Context, string, any) (json.RawMessage, error) {
+			return json.RawMessage(`{"contents":"hover"}`), nil
+		}, decode)
+		result <- signatureResult{signatures: signatures, err: err}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("hover decoder did not start")
+	}
+	cancel()
+	select {
+	case got := <-result:
+		if !errors.Is(got.err, context.Canceled) || got.signatures != nil {
+			t.Fatalf("requestSignatures = (%v, %v), want nil signatures and context canceled", got.signatures, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("requestSignatures did not return while hover conversion remained blocked")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("late hover decoder did not finish")
+	}
+	select {
+	case got := <-result:
+		t.Fatalf("late hover conversion produced another result: %+v", got)
+	default:
+	}
+}
+
+func TestRequestSignaturesPreservesFirstError(t *testing.T) {
+	firstErr := errors.New("first hover failure")
+	laterErr := errors.New("later hover failure")
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	plans := []signaturePlan{
+		{position: core.Position{Line: 0}},
+		{position: core.Position{Line: 1}},
+	}
+	request := func(ctx context.Context, _ string, params any) (json.RawMessage, error) {
+		line := params.(textDocumentPositionParams).Position.Line
+		if line == 0 {
+			close(firstStarted)
+			<-releaseFirst
+			return nil, firstErr
+		}
+		close(secondStarted)
+		<-ctx.Done()
+		return nil, laterErr
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, request, decodeHoverSignature)
+		result <- err
+	}()
+	waitSignal(t, firstStarted, "first hover request")
+	waitSignal(t, secondStarted, "second hover request")
+	close(releaseFirst)
+	if err := waitError(t, result, "signature first error"); !errors.Is(err, firstErr) {
+		t.Fatalf("requestSignatures error = %v, want first hover failure", err)
+	}
+}
+
 func TestRequestSignaturesHonorsCancellation(t *testing.T) {
 	t.Run("before dispatch", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -217,7 +312,7 @@ func TestRequestSignaturesHonorsCancellation(t *testing.T) {
 		_, err := requestSignatures(ctx, "file:///repo/a.ts", []signaturePlan{{}}, func(context.Context, string, any) (json.RawMessage, error) {
 			t.Fatal("request called after cancellation")
 			return nil, nil
-		})
+		}, decodeHoverSignature)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context canceled", err)
 		}
@@ -245,7 +340,7 @@ func TestRequestSignaturesHonorsCancellation(t *testing.T) {
 		}
 		result := make(chan error, 1)
 		go func() {
-			_, err := requestSignatures(ctx, "file:///repo/a.ts", plans, request)
+			_, err := requestSignatures(ctx, "file:///repo/a.ts", plans, request, decodeHoverSignature)
 			result <- err
 		}()
 		select {

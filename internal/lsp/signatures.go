@@ -43,7 +43,7 @@ func (p *Provider) SymbolSignatures(ctx context.Context, file string, symbols []
 			return nil, err
 		}
 	}
-	return requestSignatures(ctx, uri, plans, p.transport.call)
+	return requestSignatures(ctx, uri, plans, p.transport.call, decodeHoverSignature)
 }
 
 func needsSignatureSource(symbols []core.Symbol) bool {
@@ -90,7 +90,9 @@ func planSignature(symbol core.Symbol, source string) (signaturePlan, error) {
 	return plan, nil
 }
 
-func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, request requestFunc) ([]string, error) {
+type hoverDecoder func(json.RawMessage) (string, error)
+
+func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, request requestFunc, decode hoverDecoder) ([]string, error) {
 	signatures := make([]string, len(plans))
 	var indexes []int
 	for i, plan := range plans {
@@ -125,7 +127,13 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 					Position:     lspPosition{Line: plan.position.Line, Character: plan.position.Character},
 				})
 				if err == nil {
-					signatures[index], err = decodeHoverSignature(raw)
+					var signature string
+					signature, err = runFiniteWork(workCtx, nil, func() (string, error) {
+						return decode(raw)
+					})
+					if err == nil {
+						signatures[index] = signature
+					}
 				}
 				if err != nil {
 					errOnce.Do(func() {
