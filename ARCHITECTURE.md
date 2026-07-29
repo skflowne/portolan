@@ -7,7 +7,8 @@ render natively on GitHub.
 **One sentence:** a long-lived **Go daemon** (`portoland`) exposes an LSP-derived code graph to a
 coding agent through **two faces on one process** — MCP tools for the model, and a control socket
 whose current generation-bump scaffold becomes the harness's blocking edit-sync barrier in Phase 1
-— so the agent navigates code by typed graph lookup instead of grep.
+— so the agent has a graph-aware tool alongside grep for accurately answering structural and
+relational codebase questions.
 
 ---
 
