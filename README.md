@@ -13,8 +13,9 @@ of how places reach each other, rather than a picture of the terrain.)
 ## Status
 
 **Phase 0 complete** — walking skeleton: a Go daemon (`portoland`) with an MCP stdio server, three
-passthrough tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
-provider, deterministic daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
+LSP-backed tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
+provider, including bounded semantic-signature enrichment for outlines; deterministic
+daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
 with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
 that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed
 on stderr. The current control protocol's `sync <file>` command only bumps the shared generation;

@@ -89,9 +89,10 @@ For `get_outline`, `Signature` is a compact provider-authoritative semantic summ
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
 provider performs a concurrency-limited hover batch. Named symbols use their selection ranges;
 synthetic TypeScript symbols use source ranges only to locate an authoritative hover position, while
-bodyless call, construct, and index signatures use their complete declaration ranges. If none of
-those sources yields an authoritative summary, the optional signature is omitted rather than
-reconstructed from a body.
+bodyless call, construct, and index signatures use their complete declaration ranges. Source-range
+planning uses the exact text retained from `didOpen`, so it cannot mix LSP ranges with a newer disk
+snapshot before Phase 1 adds edit synchronization. If none of those sources yields an authoritative
+summary, the optional signature is omitted rather than reconstructed from a body.
 
 ---
 

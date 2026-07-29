@@ -57,6 +57,9 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 					t.Errorf("%s detail = %q, want empty and independent of signature", symbol.Name, symbol.Detail)
 				}
 			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("signature keys = %+v, want exactly %+v", got, tc.want)
+			}
 			for key, want := range tc.want {
 				if got[key] != want {
 					t.Errorf("signature %s = %q, want %q (all: %+v)", key, got[key], want, got)

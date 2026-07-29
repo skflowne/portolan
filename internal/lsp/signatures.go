@@ -30,9 +30,10 @@ func (p *Provider) SymbolSignatures(ctx context.Context, file string, symbols []
 
 	var source string
 	if needsSignatureSource(symbols) {
-		source, err = p.readFileContext(ctx, canonicalFile)
-		if err != nil {
-			return nil, fmt.Errorf("lsp: reading signatures from %s: %w", canonicalFile, err)
+		var ok bool
+		source, ok = p.openedSource(canonicalFile)
+		if !ok {
+			return nil, fmt.Errorf("lsp: opened source unavailable for %s", canonicalFile)
 		}
 	}
 	plans := make([]signaturePlan, len(symbols))
