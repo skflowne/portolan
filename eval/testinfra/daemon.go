@@ -116,9 +116,12 @@ type Daemon struct {
 func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	t.Helper()
 	RequireSupport(t)
-	realTsgo, err := exec.LookPath("tsgo")
+	realTsgo, err := resolveTsgo()
 	if err != nil {
-		t.Skip("tsgo not on PATH")
+		if os.Getenv(RequireTsgoEnv) == "1" {
+			t.Fatalf("required analyzer unavailable: %v", err)
+		}
+		t.Skipf("compatible analyzer unavailable: %v", err)
 	}
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "tsgo.pid")
