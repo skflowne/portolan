@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/skflowne/portolan/internal/core"
 )
@@ -26,8 +25,8 @@ type FindDefinitionOutput struct {
 	Truncated bool            `json:"truncated"`
 	Freshness core.Freshness  `json:"freshness"`
 	Message   string          `json:"message,omitempty"`
-	// Error is set only when the underlying provider call itself failed
-	// (a soft error — the call never panics or returns a Go error for this).
+	// Error is set for input-validation or provider failures. Both are soft:
+	// the call never panics or returns a Go error for them.
 	Error string `json:"error,omitempty"`
 }
 
@@ -38,18 +37,15 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 	ctx, cancel := t.operationContext(ctx)
 	defer cancel()
 
-	start := time.Now()
-	fresh := t.Gen.Current()
+	start, fresh, ev := t.beginCall("find_definition")
 	out := FindDefinitionOutput{Freshness: fresh}
-	ev := core.Event{
-		SessionID:  t.Cfg.SessionID,
-		GraphMode:  t.Cfg.GraphMode,
-		Tool:       "find_definition",
-		Generation: fresh.Generation,
-		Stale:      fresh.Stale,
-	}
 
-	file := t.normFile(in.File)
+	file, failure := t.validateFile(ctx, &ev, start, in.File)
+	if failure != nil {
+		out.Error = failure.err
+		out.Message = failure.message
+		return out, nil
+	}
 	symbols, err := t.Provider.DocumentSymbols(ctx, file)
 	if err == nil {
 		err = ctx.Err()
