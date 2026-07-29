@@ -170,6 +170,29 @@ func TestToolTelemetryLifecycle(t *testing.T) {
 	}
 }
 
+func TestToolDurationIncludesExecution(t *testing.T) {
+	const (
+		providerDelay = 25 * time.Millisecond
+		minimumMs     = 20
+	)
+	gen := &core.GenerationCounter{}
+	provider := newTelemetryProvider("get_outline", "success", gen)
+	provider.delay = providerDelay
+	logger := &capturingLogger{}
+	tl := New(provider, gen, logger, core.Config{})
+
+	if _, err := tl.GetOutline(context.Background(), GetOutlineInput{File: "/repo/main.go"}); err != nil {
+		t.Fatalf("GetOutline: %v", err)
+	}
+	ev, ok := logger.last()
+	if !ok {
+		t.Fatal("telemetry event not emitted")
+	}
+	if ev.DurationMs < minimumMs {
+		t.Fatalf("duration_ms = %d, want at least %d to include provider execution", ev.DurationMs, minimumMs)
+	}
+}
+
 func TestToolMethodsUseSharedFinalEmission(t *testing.T) {
 	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
@@ -1011,6 +1034,7 @@ type telemetryProvider struct {
 	tool    string
 	outcome string
 	gen     *core.GenerationCounter
+	delay   time.Duration
 
 	bumpOnce sync.Once
 	mu       sync.Mutex
@@ -1026,6 +1050,7 @@ func (p *telemetryProvider) enter() {
 	p.calls++
 	p.mu.Unlock()
 	p.bumpOnce.Do(func() { p.gen.Bump() })
+	time.Sleep(p.delay)
 }
 
 func (p *telemetryProvider) callCount() int {
