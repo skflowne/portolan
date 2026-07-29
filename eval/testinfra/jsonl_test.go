@@ -46,6 +46,21 @@ func TestParseJSONLSnapshot(t *testing.T) {
 
 func TestWaitForQuiescentJSONL(t *testing.T) {
 	const quiet = 40 * time.Millisecond
+	t.Run("empty snapshot waits and exposes late record", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			_ = os.WriteFile(path, []byte("{\"tool\":\"late\"}\n"), 0o600)
+		}()
+		_, err := WaitForQuiescentJSONL(path, 0, time.Second, quiet)
+		if err == nil || !strings.Contains(err.Error(), "1 records, want exactly 0") {
+			t.Fatalf("error = %v, want late record rejection", err)
+		}
+	})
+
 	t.Run("partial final becomes complete", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "events.jsonl")
 		if err := os.WriteFile(path, []byte("{\"tool\":\"one\"}\n{\"tool\":"), 0o600); err != nil {
