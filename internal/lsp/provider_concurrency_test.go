@@ -566,12 +566,3 @@ func (c *observedWaitContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.waiting) })
 	return c.Context.Done()
 }
-
-func waitSignal(t *testing.T, signal <-chan struct{}, operation string) {
-	t.Helper()
-	select {
-	case <-signal:
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", operation)
-	}
-}
