@@ -17,7 +17,9 @@ passthrough tools (`find_definition` / `find_references` / `get_outline`) over a
 provider, deterministic daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
 with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
 that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed
-on stderr. **Phase 1 (the staleness barrier) is next.**
+on stderr. The current control protocol's `sync <file>` command only bumps the shared generation;
+it does not yet run a blocking hook, send LSP `didChange`/`didSave`, or wait for settle detection.
+**Phase 1 (the blocking staleness barrier) is next.**
 
 Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or the standard base
 `OTEL_EXPORTER_OTLP_ENDPOINT`) to enable the OTLP/HTTP mirror. With neither configured, the daemon
@@ -43,8 +45,8 @@ Docs:
   `LanguageProvider` interface (polyglot via other LSP servers later).
 - **Thin graph layer:** LSP passthrough for point queries; a lightweight materialized index
   (in-memory adjacency + SQLite) only for derived queries (repo-map/PageRank, blast-radius).
-- **Staleness is the hard problem:** a blocking `PostToolUse` hook is a deterministic sync
-  barrier; freshness metadata + model instruction back it up.
+- **Target staleness design:** a blocking `PostToolUse` hook will provide a deterministic sync
+  barrier in Phase 1; freshness metadata + model instruction back it up.
 - **Never deny grep** — a search-strategy doc (always in context) teaches graph-vs-grep.
 - **Two target harnesses:** Claude Code (rich, product-first) + Pi (minimal, bare-bones eval
   control). Thin adapters over the portable Go core.

@@ -47,8 +47,9 @@ failures are explicit through counters, stderr diagnostics, and shutdown errors.
 
 ## Architecture
 
-One long-lived **Go daemon** = the portable core, **two client faces on one process**
-(forced by staleness: the hook and the model must share live LSP/graph state).
+The diagram below is the **target state**, not the current Phase 0 implementation. One long-lived
+**Go daemon** = the portable core, **two client faces on one process** (forced by staleness: the hook
+and the model must share live LSP/graph state).
 
 ```
 ┌──────────────── Claude Code (harness adapter lives here) ───────────────┐
@@ -72,6 +73,11 @@ One long-lived **Go daemon** = the portable core, **two client faces on one proc
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+**Current Phase 0 status:** the project-keyed control socket accepts `sync <file>` and bumps the
+shared generation counter only. The harness hook, LSP `didChange`/`didSave`, and settle detection
+shown above are Phase 1 target behavior and are not implemented yet. The materialized index and
+`SessionStart` injection are Phase 2 targets.
+
 **Cross-cutting principles:** signatures-not-bodies default · symbol-name-path addressing
 (offsets shift under edits we didn't observe) · cap/paginate every tool · never deny grep ·
 bounded waits everywhere · accept honest null results.
@@ -83,8 +89,9 @@ bounded waits everywhere · accept honest null results.
 The LSP **already holds the semantic graph.** So the layer is thin:
 
 - **Point queries → LSP passthrough, no storage.** `find_definition`, `find_references`,
-  `get_type`, `get_members`, implementations. Always fresh (the barrier keeps the LSP
-  current), shaped + freshness-tagged, returned. Phase 0 is entirely this.
+  `get_type`, `get_members`, implementations. Phase 1 targets always-fresh results by keeping the
+  LSP current through the barrier; results remain shaped + freshness-tagged. Phase 0 is entirely
+  passthrough plus the generation-bump scaffold.
 - **Derived / aggregate queries → a lightweight materialized index** (an index *over* the
   LSP's knowledge), for what LSP does poorly:
   - repo-map ranking (PageRank over the symbol reference graph — the SessionStart injection),
@@ -104,8 +111,9 @@ approximate ref graph for PageRank comes from a fast syntactic pass.
 (`modernc.org/sqlite`, pure-Go, FTS5 for name search). No graph DB** — our patterns are
 lookups + shallow traversals + PageRank; Kùzu/Neo4j would be overkill + heavy native deps.
 
-**Freshness — two tracks off the same `PostToolUse` hook:** (1) the LSP barrier for precise
-queries; (2) incremental re-parse of the edited file to patch the materialized index.
+**Target freshness design — two tracks off the same `PostToolUse` hook:** (1) the Phase 1 LSP
+barrier for precise queries; (2) Phase 2 incremental re-parse of the edited file to patch the
+materialized index.
 
 Enters the build at **Phase 2** (repo-map) and **Phase 3** (impact). Phases 0–1 don't need it.
 
