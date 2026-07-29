@@ -47,47 +47,48 @@ type GetOutlineOutput struct {
 // doc for the shared found/error/cap/freshness/telemetry contract, and
 // OutlineSymbol's doc for the flattening/Depth shape decision.
 func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineOutput, error) {
-	ctx, cancel := t.operationContext(ctx)
-	defer cancel()
+	var out GetOutlineOutput
+	t.runTool(ctx, "get_outline", &out, func(ctx context.Context) {
+		file, failure := validateFile(in.File)
+		if failure != nil {
+			out.Error = failure.err
+			out.Message = failure.message
+			return
+		}
+		symbols, err := t.Provider.DocumentSymbols(ctx, file)
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("failed to load symbols for %s", file)
+			return
+		}
+		if len(symbols) == 0 {
+			out.Message = fmt.Sprintf("no symbols found in %s", file)
+			return
+		}
 
-	start, fresh, ev := t.beginCall("get_outline")
-	out := GetOutlineOutput{Freshness: fresh}
+		flat, truncated, err := flattenSymbols(ctx, symbols, t.Cfg.Cap())
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
+			return
+		}
 
-	file, failure := t.validateFile(ctx, &ev, start, in.File)
-	if failure != nil {
-		out.Error = failure.err
-		out.Message = failure.message
-		return out, nil
-	}
-	symbols, err := t.Provider.DocumentSymbols(ctx, file)
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err != nil {
-		out.Error = err.Error()
-		out.Message = fmt.Sprintf("failed to load symbols for %s", file)
-		t.emit(ctx, &ev, start, 0, false, err.Error())
-		return out, nil
-	}
-	if len(symbols) == 0 {
-		out.Message = fmt.Sprintf("no symbols found in %s", file)
-		t.emit(ctx, &ev, start, 0, false, "")
-		return out, nil
-	}
-
-	flat, truncated, err := flattenSymbols(ctx, symbols, t.Cfg.Cap())
-	if err != nil {
-		out.Error = err.Error()
-		out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
-		t.emit(ctx, &ev, start, 0, false, err.Error())
-		return out, nil
-	}
-
-	out.Found = true
-	out.Symbols = flat
-	out.Truncated = truncated
-	t.emit(ctx, &ev, start, len(flat), truncated, "")
+		out.Found = true
+		out.Symbols = flat
+		out.Truncated = truncated
+	})
 	return out, nil
+}
+
+func (o *GetOutlineOutput) setFreshness(fresh core.Freshness) {
+	o.Freshness = fresh
+}
+
+func (o *GetOutlineOutput) telemetryFields() (int, bool, string) {
+	return len(o.Symbols), o.Truncated, o.Error
 }
 
 // flattenSymbols walks symbols depth-first and stops once it can prove the

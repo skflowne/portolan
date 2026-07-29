@@ -62,24 +62,50 @@ func (t *Tools) operationContext(parent context.Context) (context.Context, conte
 	return context.WithTimeout(parent, timeout)
 }
 
-func (t *Tools) beginCall(tool string) (time.Time, core.Freshness, core.Event) {
-	start := time.Now()
-	fresh := t.Gen.Current()
-	return start, fresh, core.Event{
-		SessionID:  t.Cfg.SessionID,
-		GraphMode:  t.Cfg.GraphMode,
-		Tool:       tool,
-		Generation: fresh.Generation,
-		Stale:      fresh.Stale,
-	}
+// toolResult exposes completion-owned telemetry without letting tool bodies
+// construct or emit events.
+type toolResult interface {
+	setFreshness(core.Freshness)
+	telemetryFields() (resultSize int, truncated bool, errMsg string)
 }
 
-func (t *Tools) emit(ctx context.Context, ev *core.Event, start time.Time, resultSize int, truncated bool, errMsg string) {
-	ev.DurationMs = time.Since(start).Milliseconds()
-	ev.ResultSize = resultSize
-	ev.Truncated = truncated
-	ev.Err = errMsg
-	t.Logger.Log(ctx, *ev)
+type toolCall struct {
+	logger core.Logger
+	start  time.Time
+	event  core.Event
+}
+
+// runTool owns the complete event lifecycle. Configuration supplies session
+// and graph correlation, the call identity supplies the tool name, freshness
+// is snapped before work, the runner clock supplies duration, and the completed
+// result supplies size, truncation, and error. The sink supplies Timestamp;
+// current tools do not populate Extra.
+func (t *Tools) runTool(parent context.Context, tool string, result toolResult, execute func(context.Context)) {
+	start := time.Now()
+	fresh := t.Gen.Current()
+	call := toolCall{
+		logger: t.Logger,
+		start:  start,
+		event: core.Event{
+			SessionID:  t.Cfg.SessionID,
+			GraphMode:  t.Cfg.GraphMode,
+			Tool:       tool,
+			Generation: fresh.Generation,
+			Stale:      fresh.Stale,
+		},
+	}
+	result.setFreshness(fresh)
+
+	ctx, cancel := t.operationContext(parent)
+	defer cancel()
+	defer call.finish(ctx, result)
+	execute(ctx)
+}
+
+func (c *toolCall) finish(ctx context.Context, result toolResult) {
+	c.event.ResultSize, c.event.Truncated, c.event.Err = result.telemetryFields()
+	c.event.DurationMs = time.Since(c.start).Milliseconds()
+	c.logger.Log(ctx, c.event)
 }
 
 type fileValidationFailure struct {
@@ -87,12 +113,10 @@ type fileValidationFailure struct {
 	message string
 }
 
-func (t *Tools) validateFile(ctx context.Context, ev *core.Event, start time.Time, input string) (string, *fileValidationFailure) {
+func validateFile(input string) (string, *fileValidationFailure) {
 	file, err := pathnorm.Canonicalize(input)
 	if err == nil {
 		return file, nil
 	}
-	failure := &fileValidationFailure{err: invalidFileError, message: invalidFileMessage}
-	t.emit(ctx, ev, start, 0, false, failure.err)
-	return "", failure
+	return "", &fileValidationFailure{err: invalidFileError, message: invalidFileMessage}
 }

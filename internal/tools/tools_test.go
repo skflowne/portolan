@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +92,140 @@ func fileToolCases() []fileToolCase {
 				return fileCallResult{out.Found, len(out.Symbols), out.Truncated, out.Freshness, out.Message, out.Error, err}
 			},
 		},
+	}
+}
+
+func TestToolTelemetryLifecycle(t *testing.T) {
+	const (
+		initialGeneration = 1
+		sessionID         = "telemetry-session"
+		graphMode         = "no-graph"
+	)
+	for _, tool := range fileToolCases() {
+		outcomes := []string{"success", "empty", "provider_error", "input_error"}
+		if tool.name != "get_outline" {
+			outcomes = append(outcomes, "unresolved", "result_error")
+		}
+		for _, outcome := range outcomes {
+			t.Run(tool.name+"/"+outcome, func(t *testing.T) {
+				gen := &core.GenerationCounter{}
+				gen.Bump()
+				provider := newTelemetryProvider(tool.name, outcome, gen)
+				logger := &capturingLogger{}
+				tl := New(provider, gen, logger, core.Config{
+					SessionID:  sessionID,
+					GraphMode:  graphMode,
+					MaxResults: 2,
+				})
+				file := "/repo/main.go"
+				if outcome == "input_error" {
+					file = "relative.go"
+				}
+
+				got := tool.call(context.Background(), tl, file)
+				if got.err != nil {
+					t.Fatalf("tool returned Go error: %v", got.err)
+				}
+				if logger.count() != 1 {
+					t.Fatalf("telemetry events = %d, want exactly 1", logger.count())
+				}
+				ev, _ := logger.last()
+				if ev.SessionID != sessionID || ev.GraphMode != graphMode || ev.Tool != tool.name {
+					t.Fatalf("static correlation fields = session %q mode %q tool %q", ev.SessionID, ev.GraphMode, ev.Tool)
+				}
+				if ev.Generation != initialGeneration || ev.Stale || ev.Generation != got.freshness.Generation || ev.Stale != got.freshness.Stale {
+					t.Fatalf("event freshness = {%d,%v}, output freshness = %+v, want initial generation %d", ev.Generation, ev.Stale, got.freshness, initialGeneration)
+				}
+				if ev.ResultSize != got.resultLen || ev.Truncated != got.truncated || ev.Err != got.errorText {
+					t.Fatalf("event completion = size %d truncated %v err %q, output = size %d truncated %v err %q", ev.ResultSize, ev.Truncated, ev.Err, got.resultLen, got.truncated, got.errorText)
+				}
+				if ev.Extra != nil {
+					t.Fatalf("event extra = %+v, want nil", ev.Extra)
+				}
+
+				switch outcome {
+				case "success":
+					if !got.found || got.resultLen != 2 || !got.truncated || got.errorText != "" {
+						t.Fatalf("success result = %+v, want two capped results", got)
+					}
+				case "empty", "unresolved":
+					if got.found || got.resultLen != 0 || got.truncated || got.errorText != "" || got.message == "" {
+						t.Fatalf("empty result = %+v", got)
+					}
+				case "provider_error", "result_error", "input_error":
+					if got.found || got.resultLen != 0 || got.truncated || got.errorText == "" || got.message == "" {
+						t.Fatalf("soft failure result = %+v", got)
+					}
+				}
+
+				if outcome == "input_error" {
+					if provider.callCount() != 0 || gen.Current().Generation != initialGeneration {
+						t.Fatalf("input failure provider calls = %d generation = %d", provider.callCount(), gen.Current().Generation)
+					}
+				} else if provider.callCount() == 0 || gen.Current().Generation != initialGeneration+1 {
+					t.Fatalf("provider calls = %d generation = %d, want work after initial snapshot", provider.callCount(), gen.Current().Generation)
+				}
+			})
+		}
+	}
+}
+
+func TestToolMethodsUseSharedFinalEmission(t *testing.T) {
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse tools package: %v", err)
+	}
+	pkg := packages["tools"]
+	if pkg == nil {
+		t.Fatal("tools package not found")
+	}
+
+	toolCount := 0
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			method, ok := decl.(*ast.FuncDecl)
+			if !ok || method.Recv == nil || !ast.IsExported(method.Name.Name) {
+				continue
+			}
+			receiver, ok := method.Recv.List[0].Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			receiverName, ok := receiver.X.(*ast.Ident)
+			if !ok || receiverName.Name != "Tools" {
+				continue
+			}
+			toolCount++
+			t.Run(method.Name.Name, func(t *testing.T) {
+				runnerCalls := 0
+				var localEmitters []string
+				ast.Inspect(method.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					selector, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					switch selector.Sel.Name {
+					case "runTool":
+						runnerCalls++
+					case "emit", "Log":
+						localEmitters = append(localEmitters, selector.Sel.Name)
+					}
+					return true
+				})
+				if runnerCalls != 1 || len(localEmitters) != 0 {
+					t.Fatalf("shared runner calls = %d, local emitters = %v; want one runner and no local emission", runnerCalls, localEmitters)
+				}
+			})
+		}
+	}
+	if toolCount != len(fileToolCases()) {
+		t.Fatalf("exported tool methods = %d, test cases = %d", toolCount, len(fileToolCases()))
 	}
 }
 
@@ -868,6 +1006,84 @@ type toolCallResult struct {
 	errText string
 	err     error
 }
+
+type telemetryProvider struct {
+	tool    string
+	outcome string
+	gen     *core.GenerationCounter
+
+	bumpOnce sync.Once
+	mu       sync.Mutex
+	calls    int
+}
+
+func newTelemetryProvider(tool, outcome string, gen *core.GenerationCounter) *telemetryProvider {
+	return &telemetryProvider{tool: tool, outcome: outcome, gen: gen}
+}
+
+func (p *telemetryProvider) enter() {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	p.bumpOnce.Do(func() { p.gen.Bump() })
+}
+
+func (p *telemetryProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *telemetryProvider) symbols(file string) []core.Symbol {
+	if p.tool == "get_outline" {
+		if p.outcome == "empty" {
+			return nil
+		}
+		return []core.Symbol{
+			{Name: "First", File: file},
+			{Name: "Second", File: file},
+			{Name: "Third", File: file},
+		}
+	}
+	if p.outcome == "unresolved" {
+		return []core.Symbol{{Name: "Other", File: file}}
+	}
+	return []core.Symbol{{Name: "Target", File: file}}
+}
+
+func (p *telemetryProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
+	p.enter()
+	if p.outcome == "result_error" {
+		return nil, errBoom
+	}
+	if p.outcome == "empty" {
+		return nil, nil
+	}
+	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
+}
+
+func (p *telemetryProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
+	p.enter()
+	if p.outcome == "result_error" {
+		return nil, errBoom
+	}
+	if p.outcome == "empty" {
+		return nil, nil
+	}
+	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
+}
+
+func (p *telemetryProvider) DocumentSymbols(_ context.Context, file string) ([]core.Symbol, error) {
+	p.enter()
+	if p.outcome == "provider_error" {
+		return nil, errBoom
+	}
+	return p.symbols(file), nil
+}
+
+func (p *telemetryProvider) Close() error { return nil }
+
+var _ core.LanguageProvider = (*telemetryProvider)(nil)
 
 type fileRecordingProvider struct {
 	mu      sync.Mutex

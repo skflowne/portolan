@@ -33,67 +33,63 @@ type FindReferencesOutput struct {
 // then calls provider.References with includeDeclaration=true. See the
 // package doc for the shared found/error/cap/freshness/telemetry contract.
 func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (FindReferencesOutput, error) {
-	ctx, cancel := t.operationContext(ctx)
-	defer cancel()
+	var out FindReferencesOutput
+	t.runTool(ctx, "find_references", &out, func(ctx context.Context) {
+		file, failure := validateFile(in.File)
+		if failure != nil {
+			out.Error = failure.err
+			out.Message = failure.message
+			return
+		}
+		symbols, err := t.Provider.DocumentSymbols(ctx, file)
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("failed to load symbols for %s", file)
+			return
+		}
 
-	start, fresh, ev := t.beginCall("find_references")
-	out := FindReferencesOutput{Freshness: fresh}
+		pos, ok, err := resolveSymbolPosition(ctx, symbols, in.Symbol, in.Line)
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("operation canceled while resolving symbol %q", in.Symbol)
+			return
+		}
+		if !ok {
+			out.Message = fmt.Sprintf("symbol %q not found in %s", in.Symbol, file)
+			return
+		}
 
-	file, failure := t.validateFile(ctx, &ev, start, in.File)
-	if failure != nil {
-		out.Error = failure.err
-		out.Message = failure.message
-		return out, nil
-	}
-	symbols, err := t.Provider.DocumentSymbols(ctx, file)
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err != nil {
-		out.Error = err.Error()
-		out.Message = fmt.Sprintf("failed to load symbols for %s", file)
-		t.emit(ctx, &ev, start, 0, false, err.Error())
-		return out, nil
-	}
+		locs, err := t.Provider.References(ctx, file, pos, true)
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("provider error resolving references to %q", in.Symbol)
+			return
+		}
+		if len(locs) == 0 {
+			out.Message = fmt.Sprintf("no references found for %q", in.Symbol)
+			return
+		}
 
-	pos, ok, err := resolveSymbolPosition(ctx, symbols, in.Symbol, in.Line)
-	if err != nil {
-		out.Error = err.Error()
-		out.Message = fmt.Sprintf("operation canceled while resolving symbol %q", in.Symbol)
-		t.emit(ctx, &ev, start, 0, false, err.Error())
-		return out, nil
-	}
-	if !ok {
-		out.Message = fmt.Sprintf("symbol %q not found in %s", in.Symbol, file)
-		t.emit(ctx, &ev, start, 0, false, "")
-		return out, nil
-	}
-
-	locs, err := t.Provider.References(ctx, file, pos, true)
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err != nil {
-		out.Error = err.Error()
-		out.Message = fmt.Sprintf("provider error resolving references to %q", in.Symbol)
-		t.emit(ctx, &ev, start, 0, false, err.Error())
-		return out, nil
-	}
-	if len(locs) == 0 {
-		out.Message = fmt.Sprintf("no references found for %q", in.Symbol)
-		t.emit(ctx, &ev, start, 0, false, "")
-		return out, nil
-	}
-
-	truncated := false
-	if cap := t.Cfg.Cap(); len(locs) > cap {
-		locs = locs[:cap]
-		truncated = true
-	}
-
-	out.Found = true
-	out.Locations = locs
-	out.Truncated = truncated
-	t.emit(ctx, &ev, start, len(locs), truncated, "")
+		if cap := t.Cfg.Cap(); len(locs) > cap {
+			locs = locs[:cap]
+			out.Truncated = true
+		}
+		out.Found = true
+		out.Locations = locs
+	})
 	return out, nil
+}
+
+func (o *FindReferencesOutput) setFreshness(fresh core.Freshness) {
+	o.Freshness = fresh
+}
+
+func (o *FindReferencesOutput) telemetryFields() (int, bool, string) {
+	return len(o.Locations), o.Truncated, o.Error
 }
