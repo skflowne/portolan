@@ -33,6 +33,26 @@ func TestRunFiniteWorkCancellationPrecedence(t *testing.T) {
 		}
 	})
 
+	t.Run("interruption prevents work", func(t *testing.T) {
+		interrupted := make(chan struct{})
+		close(interrupted)
+		cause := errors.New("transport unavailable")
+		var calls atomic.Int32
+		_, err := runFiniteWork(context.Background(), &finiteWorkInterruption{
+			done:  interrupted,
+			cause: func() error { return cause },
+		}, func() (string, error) {
+			calls.Add(1)
+			return "completed", nil
+		})
+		if !errors.Is(err, cause) {
+			t.Fatalf("runFiniteWork error = %v, want interruption cause", err)
+		}
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("work calls = %d, want none", got)
+		}
+	})
+
 	t.Run("caller cancellation over interruption", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -54,6 +74,20 @@ func TestRunFiniteWorkCancellationPrecedence(t *testing.T) {
 			t.Fatalf("work calls = %d, want none", got)
 		}
 	})
+}
+
+func TestFiniteWorkResultPublicationIsBuffered(t *testing.T) {
+	result := newFiniteWorkResult[string]()
+	published := make(chan struct{})
+	go func() {
+		result <- finiteWorkResult[string]{value: "completed"}
+		close(published)
+	}()
+
+	waitSignal(t, published, "unobserved finite work result publication")
+	if got := <-result; got.value != "completed" || got.err != nil {
+		t.Fatalf("published result = %+v, want completed value", got)
+	}
 }
 
 func TestRunFiniteWorkReturnsBeforeLateCompletion(t *testing.T) {
