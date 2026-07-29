@@ -100,30 +100,36 @@ sequenceDiagram
     M->>S: tools/call find_definition {file, symbol}
     S->>T: FindDefinition(in)
     T->>T: establish one 5s operation context
-    T->>T: normFile(file) — pathnorm (C:\… → /mnt/c/…)
-    T->>P: DocumentSymbols(file, operation context)
-    opt first query for this file
-        P->>P: read file under per-file open transition
-        P->>R: dispatch textDocument/didOpen
-        R->>G: textDocument/didOpen
+    T->>T: Canonicalize(file) — pathnorm (C:\… → /mnt/c/…)
+    alt invalid or unrepresentable file
+        T->>L: admit exactly one failure Event
+        T-->>S: FindDefinitionOutput{error, freshness}
+        S-->>M: structured failure
+    else canonical file
+        T->>P: DocumentSymbols(canonical file, operation context)
+        opt first query for this file
+            P->>P: read file under per-file open transition
+            P->>R: dispatch textDocument/didOpen
+            R->>G: textDocument/didOpen
+        end
+        P->>R: register + dispatch textDocument/documentSymbol
+        R->>G: textDocument/documentSymbol
+        G-->>R: symbol tree
+        R-->>P: demultiplexed response
+        P-->>T: []Symbol
+        T->>T: resolve name → Position (SelRange.Start)
+        T->>P: Definition(canonical file, pos, same operation context)
+        P->>R: register + dispatch textDocument/definition
+        R->>G: textDocument/definition
+        G-->>R: Location[]
+        R-->>P: demultiplexed response
+        P-->>T: []core.Location
+        T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
+        T->>L: admit exactly one Event (tool, duration, size, …)
+        T-->>S: FindDefinitionOutput{found, locations, freshness}
+        S-->>M: structured result
     end
-    P->>R: register + dispatch textDocument/documentSymbol
-    R->>G: textDocument/documentSymbol
-    G-->>R: symbol tree
-    R-->>P: demultiplexed response
-    P-->>T: []Symbol
-    T->>T: resolve name → Position (SelRange.Start)
-    T->>P: Definition(file, pos, same operation context)
-    P->>R: register + dispatch textDocument/definition
-    R->>G: textDocument/definition
-    G-->>R: Location[]
-    R-->>P: demultiplexed response
-    P-->>T: []core.Location
-    T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
-    T->>L: admit exactly one Event (tool, duration, size, …)
     L-->>L: bounded FIFO → JSONL writer<br/>+ independent OTLP batch mirror
-    T-->>S: FindDefinitionOutput{found, locations, freshness}
-    S-->>M: structured result
 ```
 
 Telemetry admission snapshots each Event once before fan-out. JSONL is authoritative: one writer
