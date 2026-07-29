@@ -23,8 +23,8 @@ type OutlineSymbol struct {
 	File      string          `json:"file"`
 	Range     core.Range      `json:"range"`
 	SelRange  core.Range      `json:"selRange"`
-	Signature string          `json:"signature,omitempty"`
-	Detail    string          `json:"detail,omitempty"`
+	Signature string          `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
+	Detail    string          `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
 	Depth     int             `json:"depth"`
 }
 
@@ -75,6 +75,23 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
 			return
 		}
+		signatures, err := t.Provider.SymbolSignatures(ctx, file, signatureSymbols(flat))
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("failed to load symbol signatures for %s", file)
+			return
+		}
+		if len(signatures) != len(flat) {
+			out.Error = fmt.Sprintf("provider returned %d signatures for %d symbols", len(signatures), len(flat))
+			out.Message = fmt.Sprintf("failed to load symbol signatures for %s", file)
+			return
+		}
+		for i := range flat {
+			flat[i].Signature = signatures[i]
+		}
 
 		out.Found = true
 		out.Symbols = flat
@@ -89,6 +106,22 @@ func (o *GetOutlineOutput) setFreshness(fresh core.Freshness) {
 
 func (o *GetOutlineOutput) telemetryFields() (int, bool, string) {
 	return len(o.Symbols), o.Truncated, o.Error
+}
+
+func signatureSymbols(symbols []OutlineSymbol) []core.Symbol {
+	refs := make([]core.Symbol, len(symbols))
+	for i, symbol := range symbols {
+		refs[i] = core.Symbol{
+			Name:      symbol.Name,
+			Kind:      symbol.Kind,
+			File:      symbol.File,
+			Range:     symbol.Range,
+			SelRange:  symbol.SelRange,
+			Signature: symbol.Signature,
+			Detail:    symbol.Detail,
+		}
+	}
+	return refs
 }
 
 // flattenSymbols walks symbols depth-first and stops once it can prove the

@@ -33,9 +33,10 @@ type Location struct {
 // human-readable) so tool output is legible without a numeric lookup table.
 type SymbolKind string
 
-// Symbol is one entry in a file outline. Signature is the declaration line
-// (signatures-not-bodies default); it may be empty when the provider cannot
-// cheaply produce one.
+// Symbol is one entry in a file outline. Signature is a compact,
+// provider-authoritative declaration or type summary; it may be empty when the
+// provider cannot produce one without including a body. Detail preserves the
+// provider's independent document-symbol detail.
 type Symbol struct {
 	Name      string     `json:"name"`
 	Kind      SymbolKind `json:"kind"`
@@ -77,6 +78,11 @@ type LanguageProvider interface {
 	// DocumentSymbols returns the outline of file as a (possibly nested) symbol
 	// tree. Used both for the get_outline tool and for name→position resolution.
 	DocumentSymbols(ctx context.Context, file string) ([]Symbol, error)
+
+	// SymbolSignatures returns one signature for each symbol, in input order.
+	// An empty signature means the provider has no authoritative summary. The
+	// caller bounds symbols before invoking this method.
+	SymbolSignatures(ctx context.Context, file string, symbols []Symbol) ([]string, error)
 
 	// Close shuts the provider (and its LSP subprocess) down.
 	Close() error

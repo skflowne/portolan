@@ -82,6 +82,11 @@ type clientCapabilities struct {
 
 type textDocumentClientCapabilities struct {
 	DocumentSymbol *documentSymbolClientCapabilities `json:"documentSymbol,omitempty"`
+	Hover          *hoverClientCapabilities          `json:"hover,omitempty"`
+}
+
+type hoverClientCapabilities struct {
+	ContentFormat []string `json:"contentFormat,omitempty"`
 }
 
 type documentSymbolClientCapabilities struct {
@@ -151,6 +156,15 @@ type rawLocation struct {
 
 type documentSymbolParams struct {
 	TextDocument textDocumentIdentifier `json:"textDocument"`
+}
+
+type hoverResult struct {
+	Contents json.RawMessage `json:"contents"`
+}
+
+type markupContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
 }
 
 type lspDocumentSymbol struct {

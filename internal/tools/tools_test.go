@@ -50,6 +50,29 @@ func rng(sl, sc, el, ec int) core.Range {
 	return core.Range{Start: pos(sl, sc), End: pos(el, ec)}
 }
 
+func existingSignatures(symbols []core.Symbol) []string {
+	signatures := make([]string, len(symbols))
+	for i := range symbols {
+		signatures[i] = symbols[i].Signature
+	}
+	return signatures
+}
+
+type signatureResultProvider struct {
+	*core.StubProvider
+	signatures []string
+	err        error
+	got        []core.Symbol
+}
+
+func (p *signatureResultProvider) SymbolSignatures(_ context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	p.got = append([]core.Symbol(nil), symbols...)
+	if p.signatures != nil || p.err != nil {
+		return p.signatures, p.err
+	}
+	return existingSignatures(symbols), nil
+}
+
 func newTestTools(provider core.LanguageProvider, logger *capturingLogger, cfg core.Config) *Tools {
 	return New(provider, &core.GenerationCounter{}, logger, cfg)
 }
@@ -569,8 +592,9 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 				{
 					Name: "Outer", Kind: "class", File: file,
 					Range: rng(0, 0, 10, 0), SelRange: rng(0, 6, 0, 11),
+					Signature: "class Outer", Detail: "document symbol detail",
 					Children: []core.Symbol{
-						{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9)},
+						{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "(method) Outer.Inner(): void"},
 					},
 				},
 			},
@@ -597,6 +621,10 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 	}
 	if out.Symbols[1].Name != "Inner" || out.Symbols[1].Depth != 1 {
 		t.Fatalf("expected Inner at depth 1 second, got %+v", out.Symbols[1])
+	}
+	if out.Symbols[0].Signature != "class Outer" || out.Symbols[0].Detail != "document symbol detail" ||
+		out.Symbols[1].Signature != "(method) Outer.Inner(): void" || out.Symbols[1].Detail != "" {
+		t.Fatalf("flattened signature/detail fields = %+v, want independent provider values", out.Symbols)
 	}
 	if out.Freshness.Generation != 2 {
 		t.Fatalf("expected Freshness.Generation=2, got %d", out.Freshness.Generation)
@@ -626,6 +654,59 @@ func TestGetOutline_CapsFlattenedList(t *testing.T) {
 	}
 	if len(out.Symbols) != core.DefaultMaxResults {
 		t.Fatalf("expected %d symbols, got %d", core.DefaultMaxResults, len(out.Symbols))
+	}
+}
+
+func TestGetOutlineRequestsSignaturesOnlyForCappedSymbols(t *testing.T) {
+	file := "/repo/big.go"
+	var symbols []core.Symbol
+	for i := 0; i < 5; i++ {
+		symbols = append(symbols, core.Symbol{Name: fmt.Sprintf("S%d", i), Kind: "function", File: file, SelRange: rng(i, 0, i, 1)})
+	}
+	provider := &signatureResultProvider{StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: symbols}}}
+	tl := newTestTools(provider, &capturingLogger{}, core.Config{MaxResults: 2})
+
+	out, err := tl.GetOutline(context.Background(), GetOutlineInput{File: file})
+	if err != nil || out.Error != "" {
+		t.Fatalf("GetOutline = (%+v, %v)", out, err)
+	}
+	if len(provider.got) != 2 || provider.got[0].Name != "S0" || provider.got[1].Name != "S1" {
+		t.Fatalf("signature symbols = %+v, want capped depth-first output", provider.got)
+	}
+}
+
+func TestGetOutlineSignatureFailureIsSoftAndReturnsNoPartialOutline(t *testing.T) {
+	file := "/repo/main.go"
+	provider := &signatureResultProvider{
+		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{Name: "Target", File: file}}}},
+		err:          errBoom,
+	}
+	logger := &capturingLogger{}
+	out, err := newTestTools(provider, logger, core.Config{}).GetOutline(context.Background(), GetOutlineInput{File: file})
+	if err != nil {
+		t.Fatalf("GetOutline returned Go error: %v", err)
+	}
+	if out.Found || len(out.Symbols) != 0 || out.Error != errBoom.Error() || out.Message == "" {
+		t.Fatalf("output = %+v, want structured failure without partial symbols", out)
+	}
+	event, ok := logger.last()
+	if !ok || event.Err != errBoom.Error() || event.ResultSize != 0 {
+		t.Fatalf("event = %+v, present %v", event, ok)
+	}
+}
+
+func TestGetOutlineRejectsMisalignedSignatureResult(t *testing.T) {
+	file := "/repo/main.go"
+	provider := &signatureResultProvider{
+		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{Name: "Target", File: file}}}},
+		signatures:   []string{},
+	}
+	out, err := newTestTools(provider, &capturingLogger{}, core.Config{}).GetOutline(context.Background(), GetOutlineInput{File: file})
+	if err != nil {
+		t.Fatalf("GetOutline returned Go error: %v", err)
+	}
+	if out.Found || len(out.Symbols) != 0 || out.Error == "" || out.Message == "" {
+		t.Fatalf("output = %+v, want structured provider-contract failure", out)
 	}
 }
 
@@ -664,6 +745,9 @@ func (p *erroringProvider) References(_ context.Context, _ string, _ core.Positi
 	return nil, p.err
 }
 func (p *erroringProvider) DocumentSymbols(_ context.Context, _ string) ([]core.Symbol, error) {
+	return nil, p.err
+}
+func (p *erroringProvider) SymbolSignatures(_ context.Context, _ string, _ []core.Symbol) ([]string, error) {
 	return nil, p.err
 }
 func (p *erroringProvider) Close() error { return nil }
@@ -1106,6 +1190,10 @@ func (p *telemetryProvider) DocumentSymbols(_ context.Context, file string) ([]c
 	return p.symbols(file), nil
 }
 
+func (p *telemetryProvider) SymbolSignatures(_ context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	return existingSignatures(symbols), nil
+}
+
 func (p *telemetryProvider) Close() error { return nil }
 
 var _ core.LanguageProvider = (*telemetryProvider)(nil)
@@ -1146,6 +1234,11 @@ func (p *fileRecordingProvider) DocumentSymbols(_ context.Context, file string) 
 	return []core.Symbol{{Name: "Target", File: file}}, nil
 }
 
+func (p *fileRecordingProvider) SymbolSignatures(_ context.Context, file string, symbols []core.Symbol) ([]string, error) {
+	p.record(file)
+	return existingSignatures(symbols), nil
+}
+
 func (p *fileRecordingProvider) Close() error { return nil }
 
 type contextRecordingProvider struct {
@@ -1179,6 +1272,11 @@ func (p *contextRecordingProvider) References(ctx context.Context, file string, 
 func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
 	p.record(ctx)
 	return []core.Symbol{{Name: "Target", File: file}}, nil
+}
+
+func (p *contextRecordingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	p.record(ctx)
+	return existingSignatures(symbols), nil
 }
 
 func (p *contextRecordingProvider) Close() error { return nil }
@@ -1224,6 +1322,10 @@ func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) (
 			File: p.file,
 		}},
 	}}, nil
+}
+
+func (p *cancelingResultProvider) SymbolSignatures(_ context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	return existingSignatures(symbols), nil
 }
 
 func (p *cancelingResultProvider) secondStageCalls() int {
@@ -1280,6 +1382,13 @@ func (p *blockingProvider) DocumentSymbols(ctx context.Context, file string) ([]
 		return nil, err
 	}
 	return []core.Symbol{{Name: "Target", File: file}}, nil
+}
+
+func (p *blockingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	if err := p.block(ctx, "signatures"); err != nil {
+		return nil, err
+	}
+	return existingSignatures(symbols), nil
 }
 
 func (p *blockingProvider) secondStageCalls() int {
