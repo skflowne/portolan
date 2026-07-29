@@ -240,6 +240,8 @@ flowchart LR
     eval --> tools
     eval --> testinfra
     lifecycle --> testinfra
+    lifecycle --> mcp
+    lifecycle --> core
     testinfra --> cmd
 
     classDef center fill:#243b53,stroke:#8bd,color:#fff;
@@ -248,7 +250,9 @@ flowchart LR
 
 The daemon wires the seam: `cmd/portoland` swaps the `StubProvider` for `lsp.New(cfg)` and the
 `NopLogger` for `telemetry.FromConfig`. The telemetry owner always creates bounded JSONL and adds
-OTLP/HTTP only when a standard OTLP endpoint is explicitly configured.
+OTLP/HTTP only when a standard OTLP endpoint is explicitly configured. The lifecycle gate derives
+its expected default control-socket path through the same `internal/mcp` owner and follows that path
+through real-daemon readiness, command handling, duplicate ownership, and shutdown cleanup.
 
 ---
 

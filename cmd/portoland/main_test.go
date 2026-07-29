@@ -45,6 +45,17 @@ func TestJoinStartupErrorsPreservesPrimaryAndCleanupFailures(t *testing.T) {
 	}
 }
 
+func TestRunDelegatesControlSocketPathToOwner(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("reading main.go: %v", err)
+	}
+	const ownedConstruction = "sockPath := pmcp.SocketPath(cfg)\n\tcontrol := pmcp.NewControlSocket(sockPath, gen)"
+	if got := strings.Count(string(source), ownedConstruction); got != 1 {
+		t.Fatalf("owned control-socket construction count = %d, want 1", got)
+	}
+}
+
 func TestParseConfigHelpDescribesControlSocketDefault(t *testing.T) {
 	var output bytes.Buffer
 	_, err := parseConfigWithOutput([]string{"-h"}, &output)
