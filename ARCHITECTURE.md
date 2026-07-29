@@ -107,6 +107,7 @@ sequenceDiagram
 
     M->>S: tools/call find_definition {file, symbol}
     S->>T: FindDefinition(in)
+    T->>T: snapshot Freshness once for output and Event
     T->>T: establish one 5s operation context
     T->>T: Canonicalize(file) — pathnorm (C:\… → /mnt/c/…)
     alt invalid or unrepresentable file
@@ -132,9 +133,9 @@ sequenceDiagram
         G-->>R: Location[]
         R-->>P: demultiplexed response
         P-->>T: []core.Location
-        T->>T: cap at Cfg.Cap() · stamp Freshness{gen, stale:false}
-        T->>L: admit exactly one Event (tool, duration, size, …)
-        T-->>S: FindDefinitionOutput{found, locations, freshness}
+        T->>T: cap at Cfg.Cap()
+        T->>L: admit exactly one Event (call-start freshness, duration, size, …)
+        T-->>S: FindDefinitionOutput{found, locations, same freshness}
         S-->>M: structured result
     end
     L-->>L: bounded FIFO → JSONL writer<br/>+ independent OTLP batch mirror
