@@ -22,6 +22,14 @@ func (s *StubProvider) DocumentSymbols(_ context.Context, file string) ([]Symbol
 	return s.Symbols[file], nil
 }
 
+func (s *StubProvider) SymbolSignatures(_ context.Context, _ string, symbols []Symbol) ([]string, error) {
+	signatures := make([]string, len(symbols))
+	for i := range symbols {
+		signatures[i] = symbols[i].Signature
+	}
+	return signatures, nil
+}
+
 func (s *StubProvider) Close() error { return nil }
 
 var _ LanguageProvider = (*StubProvider)(nil)

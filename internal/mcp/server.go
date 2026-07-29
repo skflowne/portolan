@@ -62,8 +62,11 @@ func NewServer(t *tools.Tools) *sdk.Server {
 		Name: "get_outline",
 		Description: "Navigate the code graph (via the language server) to get a file's " +
 			"structural outline: every top-level and nested symbol (classes, functions, " +
-			"methods, fields, etc.) with its kind, declaration signature, and precise range, " +
-			"flattened into a depth-tagged list (depth 0 = top-level; a child immediately " +
+			"methods, fields, etc.) with its kind, precise range, and compact semantic " +
+			"signature when the provider can authoritatively supply one. An omitted signature " +
+			"means no authoritative summary was available; provider document-symbol detail " +
+			"remains a separate optional field. Symbols are flattened into a depth-tagged " +
+			"list (depth 0 = top-level; a child immediately " +
 			"follows its parent in the list). Prefer this over reading a whole file when you " +
 			"only need to know what's in it and where. Results are capped (see `truncated`) " +
 			"and carry a freshness stamp (generation/stale).",

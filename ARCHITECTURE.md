@@ -85,6 +85,13 @@ bound. The lock file remains in place so ownership release cannot race with path
 
 **Cross-cutting principles** (from `PLAN.md`): signatures-not-bodies · symbol-name-path addressing ·
 cap/paginate every tool · never deny grep · bounded waits everywhere · accept honest null results.
+For `get_outline`, `Signature` is a compact provider-authoritative semantic summary and `Detail`
+preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
+provider performs a concurrency-limited hover batch. Named symbols use their selection ranges;
+synthetic TypeScript symbols use source ranges only to locate an authoritative hover position, while
+bodyless call, construct, and index signatures use their complete declaration ranges. If none of
+those sources yields an authoritative summary, the optional signature is omitted rather than
+reconstructed from a body.
 
 ---
 
@@ -149,9 +156,11 @@ variable and uses an independent bounded batch processor. Loss and sink failures
 into shutdown errors, and diagnosed on stderr; MCP stdout remains protocol-only.
 
 The **tools layer owns one fixed 5-second operation budget** for the complete invocation. The same
-context covers path preparation, first-open disk reads and `didOpen`, name resolution, both provider
-requests, serialization, pipe writes, and response waits; the provider does not reset the deadline
-between stages. Provider initialization keeps its separate 20-second budget for project loading.
+context covers path preparation, first-open disk reads and `didOpen`, name resolution, provider
+requests, outline signature enrichment, serialization, pipe writes, and response waits; the provider
+does not reset the deadline between stages. Outline signature enrichment runs only after the result
+cap is applied and admits at most eight concurrent hover requests. Provider initialization keeps its
+separate 20-second budget for project loading.
 
 The `lsp.Provider` is concurrency-safe and delegates JSON-RPC connection ownership to one
 `transport`. That owner arbitrates open, closing, closed, and aborted states; pending-request

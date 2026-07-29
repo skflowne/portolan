@@ -1,0 +1,219 @@
+package lsp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/skflowne/portolan/internal/core"
+)
+
+func TestSymbolSignaturesFromTsgo(t *testing.T) {
+	p := newTestProvider(t)
+	tests := []struct {
+		file string
+		want map[string]string
+	}{
+		{
+			file: "signatures.ts",
+			want: map[string]string{
+				"Callable@0":       "interface Callable",
+				"()@1":             "(value: string): number",
+				"new()@2":          "new (value: string): Date",
+				"[]@3":             "[key: string]: unknown",
+				"assignedArrow@6":  "const assignedArrow: (x: number) => number",
+				"map() callback@8": "function (Anonymous function)(x: number): number",
+				"map() callback@9": "function (Anonymous function)(x: number): number",
+			},
+		},
+		{file: "default-arrow.ts", want: map[string]string{"default@0": "function (Anonymous function)(): number"}},
+		{file: "default-class.ts", want: map[string]string{"default@0": "class default", "method@1": "(method) default.method(): void"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.file, func(t *testing.T) {
+			file := absTestdata(t, tc.file)
+			symbols, err := p.DocumentSymbols(testCtx(t), file)
+			if err != nil {
+				t.Fatalf("DocumentSymbols: %v", err)
+			}
+			flat := flattenCoreSymbols(symbols)
+			signatures, err := p.SymbolSignatures(testCtx(t), file, flat)
+			if err != nil {
+				t.Fatalf("SymbolSignatures: %v", err)
+			}
+			if len(signatures) != len(flat) {
+				t.Fatalf("signatures = %d, symbols = %d", len(signatures), len(flat))
+			}
+			got := make(map[string]string, len(flat))
+			for i, symbol := range flat {
+				got[fmt.Sprintf("%s@%d", symbol.Name, symbol.Range.Start.Line)] = signatures[i]
+				if symbol.Detail != "" {
+					t.Errorf("%s detail = %q, want empty and independent of signature", symbol.Name, symbol.Detail)
+				}
+			}
+			for key, want := range tc.want {
+				if got[key] != want {
+					t.Errorf("signature %s = %q, want %q (all: %+v)", key, got[key], want, got)
+				}
+			}
+		})
+	}
+}
+
+func flattenCoreSymbols(symbols []core.Symbol) []core.Symbol {
+	var flat []core.Symbol
+	var visit func([]core.Symbol)
+	visit = func(current []core.Symbol) {
+		for _, symbol := range current {
+			children := symbol.Children
+			symbol.Children = nil
+			flat = append(flat, symbol)
+			visit(children)
+		}
+	}
+	visit(symbols)
+	return flat
+}
+
+func TestDecodeHoverSignatureSeparatesQuickInfoFromDocumentation(t *testing.T) {
+	raw := json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"before\\n```typescript\\nfunction documented(): number\\n```\\nDocumentation body.\"}}")
+	got, err := decodeHoverSignature(raw)
+	if err != nil {
+		t.Fatalf("decodeHoverSignature: %v", err)
+	}
+	if got != "function documented(): number" {
+		t.Fatalf("signature = %q, want quick info without documentation", got)
+	}
+	if got, err := decodeHoverSignature(json.RawMessage(`null`)); err != nil || got != "" {
+		t.Fatalf("null hover = (%q, %v), want unavailable signature", got, err)
+	}
+}
+
+func TestSignatureAndDocumentSymbolDetailRemainDistinct(t *testing.T) {
+	rawSymbols := json.RawMessage(`[{
+		"name":"documented","detail":"wire detail","kind":12,
+		"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":30}},
+		"selectionRange":{"start":{"line":0,"character":9},"end":{"line":0,"character":19}}
+	}]`)
+	symbols, err := decodeDocumentSymbols(context.Background(), rawSymbols, "/repo/a.ts")
+	if err != nil {
+		t.Fatalf("decodeDocumentSymbols: %v", err)
+	}
+	plans := []signaturePlan{{position: symbols[0].SelRange.Start}}
+	signatures, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, func(context.Context, string, any) (json.RawMessage, error) {
+		return json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\nfunction documented(): number\\n```\"}}"), nil
+	})
+	if err != nil {
+		t.Fatalf("requestSignatures: %v", err)
+	}
+	symbols[0].Signature = signatures[0]
+	if symbols[0].Signature != "function documented(): number" || symbols[0].Detail != "wire detail" {
+		t.Fatalf("symbol = %+v, want independent signature and detail", symbols[0])
+	}
+}
+
+func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
+	source := "interface I {\n  (value: string): number;\n}\n" +
+		"const nested = (fn = () => 1) => fn();\n"
+	tests := []struct {
+		name   string
+		symbol core.Symbol
+		want   signaturePlan
+	}{
+		{
+			name: "bodyless call signature",
+			symbol: core.Symbol{Name: "()", Kind: "method", Range: core.Range{
+				Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 26},
+			}, SelRange: core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 2}}},
+			want: signaturePlan{position: core.Position{Line: 1, Character: 2}, direct: "(value: string): number"},
+		},
+		{
+			name: "outer arrow after nested default",
+			symbol: core.Symbol{Name: "callback() callback", Kind: "function", Range: core.Range{
+				Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 38},
+			}, SelRange: core.Range{Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 15}}},
+			want: signaturePlan{position: core.Position{Line: 3, Character: 30}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := planSignature(tc.symbol, source)
+			if err != nil {
+				t.Fatalf("planSignature: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("plan = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
+	plans := make([]signaturePlan, maxConcurrentSignatureRequests*3)
+	for i := range plans {
+		plans[i].position = core.Position{Line: i}
+	}
+	var mu sync.Mutex
+	inFlight, maximum, calls := 0, 0, 0
+	reachedLimit := make(chan struct{})
+	release := make(chan struct{})
+	var reachedOnce sync.Once
+	request := func(ctx context.Context, _ string, _ any) (json.RawMessage, error) {
+		mu.Lock()
+		inFlight++
+		calls++
+		if inFlight > maximum {
+			maximum = inFlight
+		}
+		if inFlight == maxConcurrentSignatureRequests {
+			reachedOnce.Do(func() { close(reachedLimit) })
+		}
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\nfunction f(): void\\n```\"}}"), nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, request)
+		result <- err
+	}()
+	select {
+	case <-reachedLimit:
+	case <-time.After(time.Second):
+		t.Fatal("signature requests did not reach concurrency limit")
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("requestSignatures: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maximum != maxConcurrentSignatureRequests || calls != len(plans) {
+		t.Fatalf("maximum concurrency = %d, calls = %d; want %d and %d", maximum, calls, maxConcurrentSignatureRequests, len(plans))
+	}
+}
+
+func TestRequestSignaturesHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := requestSignatures(ctx, "file:///repo/a.ts", []signaturePlan{{}}, func(context.Context, string, any) (json.RawMessage, error) {
+		t.Fatal("request called after cancellation")
+		return nil, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+}

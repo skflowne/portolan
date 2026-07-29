@@ -1,6 +1,6 @@
 // Package lsp implements core.LanguageProvider against tsgo --lsp -stdio, the
-// native-preview TypeScript language server. It is a thin passthrough: LSP
-// requests in, core types out, with no caching or graph-building of its own.
+// native-preview TypeScript language server. It adapts LSP navigation and
+// semantic presentation data into core types without caching or graph-building.
 package lsp
 
 import (
@@ -113,6 +113,7 @@ func initializeProvider(rootURI, rootName string, request requestFunc, notify no
 				DocumentSymbol: &documentSymbolClientCapabilities{
 					HierarchicalDocumentSymbolSupport: true,
 				},
+				Hover: &hoverClientCapabilities{ContentFormat: []string{"markdown"}},
 			},
 		},
 		WorkspaceFolders: []workspaceFolder{{URI: rootURI, Name: rootName}},

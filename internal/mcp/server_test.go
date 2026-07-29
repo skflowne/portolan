@@ -80,15 +80,49 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	names := map[string]bool{}
+	var outline *sdk.Tool
 	for _, tool := range listRes.Tools {
 		names[tool.Name] = true
 		if tool.Description == "" {
 			t.Errorf("tool %s has empty description", tool.Name)
 		}
+		if tool.Name == "get_outline" {
+			outline = tool
+		}
 	}
 	for _, want := range []string{"find_definition", "find_references", "get_outline"} {
 		if !names[want] {
 			t.Errorf("expected tool %q to be registered, got %+v", want, names)
+		}
+	}
+	if outline == nil {
+		t.Fatal("get_outline tool not found")
+	}
+	if !strings.Contains(outline.Description, "when the provider can authoritatively supply one") ||
+		!strings.Contains(outline.Description, "omitted signature") ||
+		!strings.Contains(outline.Description, "separate optional field") {
+		t.Fatalf("get_outline description does not explain signature availability and detail separation: %q", outline.Description)
+	}
+	schema, ok := outline.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("get_outline output schema type = %T", outline.OutputSchema)
+	}
+	properties := schema["properties"].(map[string]any)
+	symbols := properties["symbols"].(map[string]any)
+	items := symbols["items"].(map[string]any)
+	symbolProperties := items["properties"].(map[string]any)
+	for field, wantDescription := range map[string]string{
+		"signature": "provider-authoritative",
+		"detail":    "independent of signature",
+	} {
+		property := symbolProperties[field].(map[string]any)
+		if property["type"] != "string" || !strings.Contains(property["description"].(string), wantDescription) {
+			t.Errorf("%s schema = %+v", field, property)
+		}
+	}
+	for _, required := range items["required"].([]any) {
+		if required == "signature" || required == "detail" {
+			t.Errorf("optional outline field %q is required by schema", required)
 		}
 	}
 }

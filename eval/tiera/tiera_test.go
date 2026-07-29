@@ -108,20 +108,44 @@ func TestTierA(t *testing.T) {
 		}
 	})
 
-	// get_outline(geometry.ts) must surface the declared top-level symbols.
+	// get_outline(geometry.ts) must surface compact semantic signatures without bodies.
 	t.Run("outline_geometry", func(t *testing.T) {
 		var out tools.GetOutlineOutput
 		callInto(t, sess, "get_outline", map[string]any{"file": geometry}, &out)
 		if !out.Found {
 			t.Fatalf("expected symbols, got none: %s", out.Message)
 		}
-		names := map[string]bool{}
-		for _, s := range out.Symbols {
-			names[s.Name] = true
+		type expectedSymbol struct {
+			name      string
+			kind      string
+			depth     int
+			line      int
+			signature string
 		}
-		for _, want := range []string{"Shape", "Circle", "Rectangle", "totalArea"} {
-			if !names[want] {
-				t.Errorf("outline missing %q (got %v)", want, keys(names))
+		want := []expectedSymbol{
+			{"Shape", "interface", 0, 3, "interface Shape"},
+			{"area", "method", 1, 4, "(method) Shape.area(): number"},
+			{"Circle", "class", 0, 7, "class Circle"},
+			{"constructor", "constructor", 1, 8, "constructor Circle(radius: number): Circle"},
+			{"radius", "property", 1, 8, "(property) Circle.radius: number"},
+			{"area", "method", 1, 10, "(method) Circle.area(): number"},
+			{"Rectangle", "class", 0, 15, "class Rectangle"},
+			{"constructor", "constructor", 1, 16, "constructor Rectangle(width: number, height: number): Rectangle"},
+			{"width", "property", 1, 17, "(property) Rectangle.width: number"},
+			{"height", "property", 1, 18, "(property) Rectangle.height: number"},
+			{"area", "method", 1, 21, "(method) Rectangle.area(): number"},
+			{"totalArea", "function", 0, 26, "function totalArea(shapes: Shape[]): number"},
+			{"shapes.reduce() callback", "function", 1, 27, "function (Anonymous function)(sum: number, s: Shape): number"},
+		}
+		if len(out.Symbols) != len(want) {
+			t.Fatalf("outline symbols = %d, want %d: %+v", len(out.Symbols), len(want), out.Symbols)
+		}
+		for i, expected := range want {
+			got := out.Symbols[i]
+			if got.Name != expected.name || string(got.Kind) != expected.kind || got.Depth != expected.depth ||
+				got.Range.Start.Line != expected.line || got.Signature != expected.signature || got.Detail != "" {
+				t.Errorf("symbol[%d] = {name:%q kind:%q depth:%d line:%d signature:%q detail:%q}, want %+v with empty detail",
+					i, got.Name, got.Kind, got.Depth, got.Range.Start.Line, got.Signature, got.Detail, expected)
 			}
 		}
 		assertFresh(t, out.Freshness.Stale)
