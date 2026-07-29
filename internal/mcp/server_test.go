@@ -3,7 +3,10 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -349,13 +352,19 @@ func TestControlSocket_CleanupPreservesReplacementSocket(t *testing.T) {
 }
 
 func TestSocketPath_DerivesFromProjectRootWhenUnset(t *testing.T) {
-	p1 := SocketPath(core.Config{ProjectRoot: "/home/user/proj-a"})
-	p2 := SocketPath(core.Config{ProjectRoot: "/home/user/proj-b"})
-	if p1 == p2 {
-		t.Fatalf("expected distinct paths for distinct project roots, got %q for both", p1)
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	const projectRoot = "/home/user/proj-a"
+	digest := sha256.Sum256([]byte(projectRoot))
+	want := filepath.Join(runtimeDir, "portoland", fmt.Sprintf("portoland-%s.sock", hex.EncodeToString(digest[:])[:12]))
+
+	if got := SocketPath(core.Config{ProjectRoot: projectRoot}); got != want {
+		t.Fatalf("SocketPath() = %q, want %q", got, want)
 	}
-	p3 := SocketPath(core.Config{ProjectRoot: "/home/user/proj-a", ControlSocket: "/tmp/explicit.sock"})
-	if p3 != "/tmp/explicit.sock" {
-		t.Fatalf("expected explicit ControlSocket to win, got %q", p3)
+	if other := SocketPath(core.Config{ProjectRoot: "/home/user/proj-b"}); other == want {
+		t.Fatalf("distinct project roots produced the same socket path %q", other)
+	}
+	if explicit := SocketPath(core.Config{ProjectRoot: projectRoot, ControlSocket: "/tmp/explicit.sock"}); explicit != "/tmp/explicit.sock" {
+		t.Fatalf("explicit ControlSocket = %q, want /tmp/explicit.sock", explicit)
 	}
 }
