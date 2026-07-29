@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"sync"
 	"time"
 
 	"github.com/skflowne/portolan/internal/core"
+	"github.com/skflowne/portolan/internal/pathnorm"
 )
 
 const initializeTimeout = 20 * time.Second
@@ -33,6 +34,11 @@ var _ core.LanguageProvider = (*Provider)(nil)
 
 // New starts tsgo and completes the LSP initialize handshake.
 func New(cfg core.Config) (*Provider, error) {
+	_, rootURI, rootName, err := workspaceIdentity(cfg.ProjectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("lsp: project root %q: %w", cfg.ProjectRoot, err)
+	}
+
 	tsgoPath := cfg.TsgoPath
 	if tsgoPath == "" {
 		tsgoPath = "tsgo"
@@ -73,17 +79,23 @@ func New(cfg core.Config) (*Provider, error) {
 	go stderrBuf.drain(stderr)
 	go connection.readLoop()
 
-	root, err := filepath.Abs(cfg.ProjectRoot)
-	if err != nil {
-		connection.abortAndWait(errProviderClosed)
-		return nil, fmt.Errorf("lsp: resolving project root %q: %w", cfg.ProjectRoot, err)
-	}
-	rootURI := uriFromPath(root)
-	if err := initializeProvider(rootURI, filepath.Base(root), connection.call, connection.notify); err != nil {
+	if err := initializeProvider(rootURI, rootName, connection.call, connection.notify); err != nil {
 		connection.abortAndWait(errProviderClosed)
 		return nil, err
 	}
 	return p, nil
+}
+
+func workspaceIdentity(projectRoot string) (canonicalPath, uri, name string, err error) {
+	canonicalPath, err = pathnorm.Canonicalize(projectRoot)
+	if err != nil {
+		return "", "", "", err
+	}
+	uri, err = pathnorm.PathToURI(canonicalPath)
+	if err != nil {
+		return "", "", "", err
+	}
+	return canonicalPath, uri, path.Base(canonicalPath), nil
 }
 
 type requestFunc func(context.Context, string, any) (json.RawMessage, error)
@@ -114,20 +126,24 @@ func initializeProvider(rootURI, rootName string, request requestFunc, notify no
 	return nil
 }
 
-// prepareOpen resolves file to an absolute path and sends one canonical
+// prepareOpen validates file identity and sends one canonical
 // textDocument/didOpen before returning its URI.
-func (p *Provider) prepareOpen(ctx context.Context, file string) (absFile, uri string, err error) {
+func (p *Provider) prepareOpen(ctx context.Context, file string) (canonicalFile, uri string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	absFile, err = filepath.Abs(file)
+	canonicalFile, err = pathnorm.Canonicalize(file)
 	if err != nil {
-		return "", "", fmt.Errorf("lsp: resolving path %q: %w", file, err)
+		return "", "", fmt.Errorf("lsp: canonicalizing path %q: %w", file, err)
 	}
-	if err := p.ensureOpen(ctx, absFile); err != nil {
+	uri, err = pathnorm.PathToURI(canonicalFile)
+	if err != nil {
+		return "", "", fmt.Errorf("lsp: encoding path %q: %w", canonicalFile, err)
+	}
+	if err := p.ensureOpen(ctx, canonicalFile); err != nil {
 		return "", "", err
 	}
-	return absFile, uriFromPath(absFile), nil
+	return canonicalFile, uri, nil
 }
 
 type openTransition struct {
@@ -172,16 +188,16 @@ func (p *Provider) readFileContext(ctx context.Context, path string) (string, er
 }
 
 // ensureOpen elects one opener per file while unrelated files proceed.
-func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
+func (p *Provider) ensureOpen(ctx context.Context, canonicalFile string) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		p.openMu.Lock()
-		transition, exists := p.openFiles[absFile]
+		transition, exists := p.openFiles[canonicalFile]
 		if !exists {
 			transition = &openTransition{done: make(chan struct{})}
-			p.openFiles[absFile] = transition
+			p.openFiles[canonicalFile] = transition
 		}
 		p.openMu.Unlock()
 
@@ -197,12 +213,12 @@ func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
 			}
 		}
 
-		err, retryable := p.openFile(ctx, absFile)
+		err, retryable := p.openFile(ctx, canonicalFile)
 		p.openMu.Lock()
 		transition.err = err
 		transition.retryable = retryable
 		if err != nil {
-			delete(p.openFiles, absFile)
+			delete(p.openFiles, canonicalFile)
 		}
 		close(transition.done)
 		p.openMu.Unlock()
@@ -210,21 +226,25 @@ func (p *Provider) ensureOpen(ctx context.Context, absFile string) error {
 	}
 }
 
-func (p *Provider) openFile(ctx context.Context, absFile string) (error, bool) {
-	text, err := p.readFileContext(ctx, absFile)
+func (p *Provider) openFile(ctx context.Context, canonicalFile string) (error, bool) {
+	uri, err := pathnorm.PathToURI(canonicalFile)
 	if err != nil {
-		return fmt.Errorf("lsp: reading %s: %w", absFile, err), p.retryableOpenError(ctx, err)
+		return fmt.Errorf("lsp: encoding path %q: %w", canonicalFile, err), false
+	}
+	text, err := p.readFileContext(ctx, canonicalFile)
+	if err != nil {
+		return fmt.Errorf("lsp: reading %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
 	}
 	params := didOpenParams{
 		TextDocument: textDocumentItem{
-			URI:        uriFromPath(absFile),
-			LanguageID: languageIDForFile(absFile),
+			URI:        uri,
+			LanguageID: languageIDForFile(canonicalFile),
 			Version:    1,
 			Text:       text,
 		},
 	}
 	if err := p.transport.notify(ctx, "textDocument/didOpen", params); err != nil {
-		return fmt.Errorf("lsp: didOpen %s: %w", absFile, err), p.retryableOpenError(ctx, err)
+		return fmt.Errorf("lsp: didOpen %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
 	}
 	return nil, false
 }
