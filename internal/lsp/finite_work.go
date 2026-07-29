@@ -12,6 +12,10 @@ type finiteWorkInterruption struct {
 	cause func() error
 }
 
+func newFiniteWorkResult[T any]() chan finiteWorkResult[T] {
+	return make(chan finiteWorkResult[T], 1)
+}
+
 // runFiniteWork owns completion-versus-cancellation arbitration for finite work
 // whose underlying API cannot be interrupted. Caller cancellation takes
 // precedence over interruption, and either takes precedence over completion.
@@ -25,7 +29,7 @@ func runFiniteWork[T any](
 		return zero, err
 	}
 
-	result := make(chan finiteWorkResult[T], 1)
+	result := newFiniteWorkResult[T]()
 	go func() {
 		value, err := work()
 		result <- finiteWorkResult[T]{value: value, err: err}
