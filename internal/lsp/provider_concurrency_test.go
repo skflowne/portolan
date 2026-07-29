@@ -19,6 +19,33 @@ func newOpenUnitProvider(reader func(context.Context, string) ([]byte, error), w
 	return p
 }
 
+type cancelWhenWorkCompletesContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	workDone <-chan struct{}
+}
+
+func (c *cancelWhenWorkCompletesContext) Done() <-chan struct{} {
+	<-c.workDone
+	c.cancel()
+	return c.Context.Done()
+}
+
+func TestFileReadCancellationTakesPrecedenceOverReadyCompletion(t *testing.T) {
+	workDone := make(chan struct{})
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &cancelWhenWorkCompletesContext{Context: base, cancel: cancel, workDone: workDone}
+	p := newOpenUnitProvider(func(context.Context, string) ([]byte, error) {
+		close(workDone)
+		return []byte("stale"), nil
+	}, newRecordingWriteCloser())
+
+	text, err := p.readFileContext(ctx, "/repo/a.ts")
+	if !errors.Is(err, context.Canceled) || text != "" {
+		t.Fatalf("readFileContext = (%q, %v), want no text and context canceled", text, err)
+	}
+}
+
 func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 	writer := newRecordingWriteCloser()
 	firstStarted := make(chan struct{})

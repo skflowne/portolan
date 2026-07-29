@@ -154,39 +154,18 @@ type openTransition struct {
 	retryable bool
 }
 
-type fileReadResult struct {
-	text string
-	err  error
-}
-
 func (p *Provider) readFileContext(ctx context.Context, path string) (string, error) {
-	result := make(chan fileReadResult, 1)
-	go func() {
-		data, err := p.readFile(ctx, path)
-		text := ""
-		if err == nil {
-			text = string(data)
-		}
-		result <- fileReadResult{text: text, err: err}
-	}()
-	select {
-	case got := <-result:
-		return got.text, got.err
-	case <-ctx.Done():
-		select {
-		case got := <-result:
-			return got.text, got.err
-		default:
-			return "", ctx.Err()
-		}
-	case <-p.transport.unavailableDone():
-		select {
-		case got := <-result:
-			return got.text, got.err
-		default:
-			return "", p.transport.unavailableError()
-		}
+	interruption := finiteWorkInterruption{
+		done:  p.transport.unavailableDone(),
+		cause: p.transport.unavailableError,
 	}
+	return runFiniteWork(ctx, &interruption, func() (string, error) {
+		data, err := p.readFile(ctx, path)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	})
 }
 
 // ensureOpen elects one opener per file while unrelated files proceed.

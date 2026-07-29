@@ -170,6 +170,14 @@ External requests, notifications, and `$/cancelRequest` writes are admitted only
 shutdown request owns the transition to closing, server-request responses remain permitted while
 open or closing until stdin closure begins, `exit` is permitted only while closing, and no frame is
 admitted after stdin closure or in a terminal state.
+Finite work without a cancellable underlying API—first-open file reads, JSON serialization, frame
+preparation, and response conversion—runs through `runFiniteWork`. Its buffered completion channel
+lets late work exit without retaining a canceled caller; caller cancellation takes precedence over
+transport interruption, and either takes precedence over a completion visible at arbitration. The
+frame writer remains a distinct mechanism because writes can partially reach the subprocess: its
+atomic dispatch/abort state prevents a canceled frame from becoming dispatched and makes the
+transport terminal after a blocked or partial write, rather than treating I/O as discardable finite
+work.
 One background reader goroutine demuxes responses into pending entries that accept exactly one
 terminal response or error, so late responses are ignored. Per-file open transitions retain one
 canonical `didOpen` while allowing unrelated files to read concurrently. A context-aware write gate
