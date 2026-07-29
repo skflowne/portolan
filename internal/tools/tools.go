@@ -14,10 +14,9 @@
 //   - "found nothing" (unresolved symbol name, or a provider returning no
 //     results) is an honest, non-error result: Found=false with a clear
 //     Message, never a Go error
-//   - a provider error is a soft failure: it is surfaced in the Event (Err)
-//     and in the output's Error field, and the method still returns (out, nil)
-//     — callers (notably the MCP layer) never need to translate a Go error
-//     into a tool-level failure for this case, and the process never panics
+//   - input-validation and provider errors are soft failures: they are surfaced
+//     in the Event (Err) and output Error field, and the method still returns
+//     (out, nil), preserving the tool-level contract without panicking
 package tools
 
 import (
@@ -28,7 +27,11 @@ import (
 	"github.com/skflowne/portolan/internal/pathnorm"
 )
 
-const defaultOperationTimeout = 5 * time.Second
+const (
+	defaultOperationTimeout = 5 * time.Second
+	invalidFileError        = "invalid file path"
+	invalidFileMessage      = "file must be an absolute Linux/WSL path, Windows drive path, or same-distro WSL UNC path"
+)
 
 // Tools holds everything the three tool methods need: the language provider
 // (StubProvider in Phase 0, internal/lsp.Provider from Wave 2), the shared
@@ -65,11 +68,18 @@ func (t *Tools) operationContext(parent context.Context) (context.Context, conte
 	return context.WithTimeout(parent, timeout)
 }
 
-// callTimer starts the bookkeeping shared by every tool method: it captures
-// the freshness snapshot up front and returns a finish func that fills in
-// duration/result-size/truncated/err on ev and logs it exactly once. Callers
-// build ev's static fields (Tool, SessionID, GraphMode, Generation, Stale)
-// before deferring finish.
+func (t *Tools) beginCall(tool string) (time.Time, core.Freshness, core.Event) {
+	start := time.Now()
+	fresh := t.Gen.Current()
+	return start, fresh, core.Event{
+		SessionID:  t.Cfg.SessionID,
+		GraphMode:  t.Cfg.GraphMode,
+		Tool:       tool,
+		Generation: fresh.Generation,
+		Stale:      fresh.Stale,
+	}
+}
+
 func (t *Tools) emit(ctx context.Context, ev *core.Event, start time.Time, resultSize int, truncated bool, errMsg string) {
 	ev.DurationMs = time.Since(start).Milliseconds()
 	ev.ResultSize = resultSize
@@ -78,10 +88,17 @@ func (t *Tools) emit(ctx context.Context, ev *core.Event, start time.Time, resul
 	t.Logger.Log(ctx, *ev)
 }
 
-// normFile canonicalizes a caller-supplied file path to the daemon's host
-// (WSL/Linux) form before it reaches the provider. This is where a Windows
-// harness's "C:\...\a.ts" becomes "/mnt/c/.../a.ts" — the WSL↔Windows seam the
-// plan wants wired "from the start". It is a no-op for already-host paths.
-func (t *Tools) normFile(p string) string {
-	return pathnorm.Normalize(p)
+type fileValidationFailure struct {
+	err     string
+	message string
+}
+
+func (t *Tools) validateFile(ctx context.Context, ev *core.Event, start time.Time, input string) (string, *fileValidationFailure) {
+	file, err := pathnorm.Canonicalize(input)
+	if err == nil {
+		return file, nil
+	}
+	failure := &fileValidationFailure{err: invalidFileError, message: invalidFileMessage}
+	t.emit(ctx, ev, start, 0, false, failure.err)
+	return "", failure
 }
