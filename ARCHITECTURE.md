@@ -19,10 +19,10 @@ must see the same live LSP/graph state.
 
 ```mermaid
 flowchart TB
-    subgraph Harness["Harness adapter — Claude Code first (Pi later)"]
+    subgraph Clients["Client side"]
         direction TB
-        Model["Model loop<br/>built-in Grep · Read · Edit"]
-        Hooks["Hooks<br/>SessionStart · PostToolUse<br/>(Phase 1+ target)"]
+        Model["Any MCP client<br/>model loop · Grep · Read · Edit"]
+        Hooks["Optional harness adapter hooks<br/>SessionStart · PostToolUse<br/>(Phase 1+ target)"]
     end
 
     subgraph Daemon["portoland — Go daemon (portable core)"]
@@ -69,8 +69,10 @@ flowchart TB
 **Legend:** green = implemented in Phase 0 · amber = Phase 0 *scaffold* (the real socket accepts
 `sync <file>` and bumps the shared generation only) · blue dashed = target behavior not yet
 implemented. There is currently no blocking hook, LSP `didChange`/`didSave`, or settle detection.
-Those land in Phase 1. The materialized graph index (PageRank repo-map, blast-radius) is deliberately
-**not** here yet — it enters at Phase 2.
+Those land in Phase 1. The MCP face is harness-agnostic; harness-specific adapters are optional
+integrations for lifecycle injection and edit synchronization, not a requirement for graph-tool
+access. The materialized graph index (PageRank repo-map, blast-radius) is deliberately **not** here
+yet — it enters at Phase 2.
 
 **Control-socket lifecycle:** each daemon holds an advisory lock in a private per-user runtime
 directory for the listener lifetime. Socket directories must be user-owned and non-writable by
