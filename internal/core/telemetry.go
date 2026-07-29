@@ -31,8 +31,7 @@ type Logger interface {
 	Close() error
 }
 
-// NopLogger is a Logger that discards everything. Handy for tests and for the
-// stub wiring before the real telemetry spine is plugged in.
+// NopLogger satisfies Logger while discarding every event.
 type NopLogger struct{}
 
 func (NopLogger) Log(context.Context, Event) {}

@@ -12,17 +12,11 @@ import (
 	"github.com/skflowne/portolan/internal/core"
 )
 
-// ControlSocket is the Phase 0 scaffold for the Phase 1 staleness barrier: a
-// unix-socket listener that accepts newline-delimited text commands and
-// replies newline-delimited text. It understands exactly one command family
-// today:
+// ControlSocket accepts newline-delimited control commands over a Unix socket
+// and sends newline-delimited responses. Its wire contract is:
 //
 //	sync <file>   -> bumps the shared GenerationCounter, replies "ok generation=<n>\n"
 //	<anything else> -> replies "err unknown\n"
-//
-// Phase 1 will replace/extend "sync" with real edit-observation logic and
-// per-file staleness bookkeeping; the wire protocol and goroutine lifecycle
-// established here are meant to carry forward unchanged.
 type ControlSocket struct {
 	path string
 	gen  *core.GenerationCounter
@@ -30,7 +24,7 @@ type ControlSocket struct {
 	listener net.Listener
 	lockFile *os.File
 	// socketInfo identifies the inode created by net.Listen. It prevents a
-	// later owner from being removed when this instance shuts down.
+	// replacement socket owner from being removed when this instance shuts down.
 	socketInfo os.FileInfo
 	authorize  func(net.Conn) error
 
