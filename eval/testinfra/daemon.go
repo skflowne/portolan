@@ -72,9 +72,12 @@ type Config struct {
 	Env           map[string]string
 }
 
-func controlledDaemonEnv(overrides map[string]string) []string {
-	controlled := make(map[string]struct{}, len(overrides))
+func controlledDaemonEnv(overrides map[string]string, omitted ...string) []string {
+	controlled := make(map[string]struct{}, len(overrides)+len(omitted))
 	for key := range overrides {
+		controlled[key] = struct{}{}
+	}
+	for _, key := range omitted {
 		controlled[key] = struct{}{}
 	}
 	env := make([]string, 0, len(os.Environ())+len(overrides))
