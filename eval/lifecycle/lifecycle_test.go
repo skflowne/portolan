@@ -16,6 +16,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skflowne/portolan/eval/testinfra"
+	"github.com/skflowne/portolan/internal/core"
+	pmcp "github.com/skflowne/portolan/internal/mcp"
 )
 
 var daemonBin string
@@ -32,15 +34,20 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func daemonConfig() testinfra.Config {
+	return testinfra.Config{
+		Binary:      daemonBin,
+		ProjectRoot: testinfra.FixtureRoot(),
+		SessionID:   "lifecycle",
+		GraphMode:   "graph",
+	}
+}
+
 func newDaemon(t *testing.T, socket string) *testinfra.Daemon {
 	t.Helper()
-	return testinfra.NewDaemon(t, testinfra.Config{
-		Binary:        daemonBin,
-		ProjectRoot:   testinfra.FixtureRoot(),
-		SessionID:     "lifecycle",
-		GraphMode:     "graph",
-		ControlSocket: socket,
-	})
+	cfg := daemonConfig()
+	cfg.ControlSocket = socket
+	return testinfra.NewDaemon(t, cfg)
 }
 
 func startDaemon(t *testing.T, socket string) (*testinfra.Daemon, int) {
@@ -152,6 +159,74 @@ func TestDaemonRejectsInvalidTelemetryDimensionsBeforeRuntimeConstruction(t *tes
 			})
 		})
 	}
+}
+
+func TestDefaultControlSocketLifecycle(t *testing.T) {
+	runtimeBase := t.TempDir()
+	if err := os.Chmod(runtimeBase, 0o700); err != nil {
+		t.Fatalf("securing runtime base: %v", err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeBase)
+
+	cfg := daemonConfig()
+	cfg.Env = map[string]string{"XDG_RUNTIME_DIR": runtimeBase}
+	socket := pmcp.SocketPath(core.Config{ProjectRoot: cfg.ProjectRoot})
+	wantDir := filepath.Join(runtimeBase, "portoland")
+	if filepath.Dir(socket) != wantDir {
+		t.Fatalf("default socket directory = %q, want %q", filepath.Dir(socket), wantDir)
+	}
+
+	first := testinfra.NewDaemon(t, cfg)
+	if err := first.WaitForSocket(socket, testinfra.ShortWait); err != nil {
+		t.Fatalf("waiting for default control socket readiness: %v (stderr=%s)", err, first.Stderr())
+	}
+	firstPID := first.WaitForPID(t)
+	originalInfo, err := os.Lstat(socket)
+	if err != nil {
+		t.Fatalf("stat default control socket: %v", err)
+	}
+	if got := originalInfo.Mode().Perm(); got != 0o600 {
+		t.Errorf("default control socket permissions = %04o, want 0600", got)
+	}
+	dirInfo, err := os.Lstat(wantDir)
+	if err != nil {
+		t.Fatalf("stat private runtime directory: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Errorf("private runtime directory permissions = %04o, want 0700", got)
+	}
+	if got := controlCommand(t, socket, "sync file.ts"); got != "ok generation=1\n" {
+		t.Fatalf("default socket sync response = %q", got)
+	}
+
+	second := testinfra.NewDaemon(t, cfg)
+	secondPID := second.WaitForPID(t)
+	exitErr, ok := second.WaitForExit(testinfra.ShortWait)
+	if !ok {
+		t.Fatal("duplicate default-socket daemon did not exit promptly")
+	}
+	if exitErr == nil {
+		t.Fatal("duplicate default-socket daemon exited successfully")
+	}
+	if stderr := second.Stderr(); !strings.Contains(stderr, socket) || !strings.Contains(stderr, "already owned") {
+		t.Fatalf("duplicate default-socket error did not identify ownership: %s", stderr)
+	}
+	testinfra.AssertPIDGone(t, secondPID)
+
+	currentInfo, err := os.Lstat(socket)
+	if err != nil || !os.SameFile(originalInfo, currentInfo) {
+		t.Fatalf("default control socket identity changed: before=%v after=%v err=%v", originalInfo, currentInfo, err)
+	}
+	if got := controlCommand(t, socket, "sync file.ts"); got != "ok generation=2\n" {
+		t.Fatalf("original default socket sync response after duplicate = %q", got)
+	}
+	if _, ok := first.WaitForExit(50 * time.Millisecond); ok {
+		t.Fatalf("original default-socket daemon exited during duplicate startup: %v", first.ExitError())
+	}
+
+	shutdownViaStdin(t, first)
+	testinfra.AssertPIDGone(t, firstPID)
+	assertPathGone(t, socket)
 }
 
 func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {
