@@ -42,10 +42,9 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 			out.Message = failure.message
 			return
 		}
-		symbols, err := t.Provider.DocumentSymbols(ctx, file)
-		if err == nil {
-			err = ctx.Err()
-		}
+		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Symbol, error) {
+			return t.Provider.DocumentSymbols(ctx, file)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("failed to load symbols for %s", file)
@@ -63,10 +62,9 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 			return
 		}
 
-		locs, err := t.Provider.Definition(ctx, file, pos)
-		if err == nil {
-			err = ctx.Err()
-		}
+		locs, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Location, error) {
+			return t.Provider.Definition(ctx, file, pos)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("provider error resolving definition of %q", in.Symbol)

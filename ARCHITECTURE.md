@@ -159,9 +159,11 @@ into shutdown errors, and diagnosed on stderr; MCP stdout remains protocol-only.
 The **tools layer owns one fixed 5-second operation budget** for the complete invocation. The same
 context covers path preparation, first-open disk reads and `didOpen`, name resolution, provider
 requests, outline signature enrichment, serialization, pipe writes, and response waits; the provider
-does not reset the deadline between stages. Outline signature enrichment runs only after the result
-cap is applied and admits at most eight concurrent hover requests. Provider initialization keeps its
-separate 20-second budget for project loading.
+does not reset the deadline between stages. One tools-owned provider-stage runner invokes every
+provider request and rejects an otherwise successful result if the operation context is canceled by
+its acceptance point. Outline signature enrichment runs only after the result cap is applied and
+admits at most eight concurrent hover requests. Provider initialization keeps its separate 20-second
+budget for project loading.
 
 The `lsp.Provider` is concurrency-safe and delegates JSON-RPC connection ownership to one
 `transport`. That owner arbitrates open, closing, closed, and aborted states; pending-request

@@ -41,10 +41,9 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			out.Message = failure.message
 			return
 		}
-		symbols, err := t.Provider.DocumentSymbols(ctx, file)
-		if err == nil {
-			err = ctx.Err()
-		}
+		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Symbol, error) {
+			return t.Provider.DocumentSymbols(ctx, file)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("failed to load symbols for %s", file)
@@ -62,10 +61,9 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			return
 		}
 
-		locs, err := t.Provider.References(ctx, file, pos, true)
-		if err == nil {
-			err = ctx.Err()
-		}
+		locs, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Location, error) {
+			return t.Provider.References(ctx, file, pos, true)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("provider error resolving references to %q", in.Symbol)

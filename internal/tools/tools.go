@@ -13,6 +13,8 @@
 //   - input-validation and provider errors are soft failures: they are surfaced
 //     in the Event (Err) and output Error field, and the method still returns
 //     (out, nil), preserving the tool-level contract without panicking
+//   - provider stages share one invocation boundary that rejects successful
+//     results completed after operation cancellation
 package tools
 
 import (
@@ -60,6 +62,20 @@ func (t *Tools) operationContext(parent context.Context) (context.Context, conte
 		timeout = defaultOperationTimeout
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+// runProviderStage accepts a successful provider result only while the shared
+// tool-operation context remains active.
+func runProviderStage[T any](ctx context.Context, invoke func(context.Context) (T, error)) (T, error) {
+	result, err := invoke(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return result, nil
 }
 
 // toolResult exposes completion-owned telemetry without letting tool bodies
