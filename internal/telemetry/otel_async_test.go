@@ -336,7 +336,7 @@ func TestOTELCloseIsBoundedStableAndAdjudicatesPending(t *testing.T) {
 func TestOTELSnapshotFailureUsesStableSinkOwnedRepresentation(t *testing.T) {
 	exporter := &capturingExporter{}
 	otel := testOTEL(t, exporter, nil)
-	logger := &defaultingLogger{inner: Tee(otel)}
+	logger := Tee(otel)
 
 	logger.Log(context.Background(), core.Event{Tool: "unsupported", Extra: map[string]any{"bad": func() {}}})
 	if err := logger.Close(); err != nil {
@@ -356,14 +356,19 @@ func TestOTELSnapshotFailureUsesStableSinkOwnedRepresentation(t *testing.T) {
 	}
 }
 
-func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
+func TestTeeSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 	a := &fakeLogger{}
 	b := &fakeLogger{}
-	logger := &defaultingLogger{inner: Tee(a, b), sessionID: "default-session", graphMode: "graph"}
+	logger := Tee(a, b)
 	numbers := []int{1}
 	labels := map[string]string{"state": "before"}
 	extra := map[string]any{"nested": []any{"before"}, "numbers": numbers, "labels": labels}
-	logger.Log(context.Background(), core.Event{Tool: "snapshot", Extra: extra})
+	logger.Log(context.Background(), core.Event{
+		SessionID: "event-session",
+		GraphMode: "graph",
+		Tool:      "snapshot",
+		Extra:     extra,
+	})
 	extra["nested"].([]any)[0] = "after"
 	numbers[0] = 2
 	labels["state"] = "after"
@@ -373,8 +378,8 @@ func TestDefaultingLoggerSnapshotsAndTimestampsBeforeFanout(t *testing.T) {
 	if first.Timestamp == "" || first.Timestamp != second.Timestamp {
 		t.Fatalf("fanout timestamps = %q and %q", first.Timestamp, second.Timestamp)
 	}
-	if first.SessionID != "default-session" || first.GraphMode != "graph" {
-		t.Fatalf("defaults not applied: %+v", first)
+	if first.SessionID != "event-session" || first.GraphMode != "graph" {
+		t.Fatalf("correlation fields changed: %+v", first)
 	}
 	if got := first.Extra["nested"].([]any)[0]; got != "before" {
 		t.Fatalf("fanout nested snapshot mutated to %v", got)

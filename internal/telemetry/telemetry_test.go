@@ -259,7 +259,7 @@ func TestFromConfigPreservesJSONLMarshalFallbackObservability(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	jsonl := logger.(*defaultingLogger).inner.(*teeLogger).loggers[0].(*JSONLLogger)
+	jsonl := logger.(*teeLogger).loggers[0].(*JSONLLogger)
 	if stats := jsonl.Stats(); stats.MarshalFallbacks != 1 {
 		t.Fatalf("production JSONL MarshalFallbacks = %d, want 1", stats.MarshalFallbacks)
 	}
@@ -298,7 +298,7 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	jsonl := logger.(*defaultingLogger).inner.(*teeLogger).loggers[0].(*JSONLLogger)
+	jsonl := logger.(*teeLogger).loggers[0].(*JSONLLogger)
 	if stats := jsonl.Stats(); stats.Accepted != 1 || stats.Written != 1 || stats.MarshalFallbacks != 1 {
 		t.Fatalf("cyclic Extra accounting = %+v", stats)
 	}
@@ -306,6 +306,36 @@ func TestFromConfigCyclicExtraIsBoundedDetachedAndDiagnosed(t *testing.T) {
 	defer diagnosticsMu.Unlock()
 	if diagnosticCount != 1 {
 		t.Fatalf("cyclic Extra diagnostics = %d, want exactly 1", diagnosticCount)
+	}
+}
+
+func TestFromConfigDoesNotDefaultCorrelationFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	logger, err := FromConfig(core.Config{
+		JSONLPath: path,
+		SessionID: "configured-session",
+		GraphMode: "configured-mode",
+	})
+	if err != nil {
+		t.Fatalf("FromConfig: %v", err)
+	}
+	logger.Log(context.Background(), core.Event{Tool: "find_refs"})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read jsonl: %v", err)
+	}
+	var ev core.Event
+	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev.SessionID != "" || ev.GraphMode != "" {
+		t.Fatalf("logger supplied correlation fields: session_id=%q graph_mode=%q", ev.SessionID, ev.GraphMode)
 	}
 }
 
@@ -323,14 +353,16 @@ func TestFromConfigWithoutEndpointIsJSONLOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
-	defaulted := logger.(*defaultingLogger)
-	tee := defaulted.inner.(*teeLogger)
+	tee := logger.(*teeLogger)
 	if len(tee.loggers) != 1 {
 		t.Fatalf("endpoint-absent logger has %d sinks, want JSONL only", len(tee.loggers))
 	}
 
-	// Leave SessionID/GraphMode empty to exercise the defaulting behavior.
-	logger.Log(context.Background(), core.Event{Tool: "find_refs"})
+	logger.Log(context.Background(), core.Event{
+		SessionID: "event-session",
+		GraphMode: "no-graph",
+		Tool:      "find_refs",
+	})
 
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -344,10 +376,7 @@ func TestFromConfigWithoutEndpointIsJSONLOnly(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if ev.SessionID != "default-session" {
-		t.Fatalf("expected default session_id to be stamped, got %+v", ev)
-	}
-	if ev.GraphMode != "graph" {
-		t.Fatalf("expected default graph_mode to be stamped, got %+v", ev)
+	if ev.SessionID != "event-session" || ev.GraphMode != "no-graph" {
+		t.Fatalf("event correlation fields changed: %+v", ev)
 	}
 }
