@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,33 +142,16 @@ func TestDaemonRejectsInvalidTelemetryDimensionsBeforeRuntimeConstruction(t *tes
 				"--tsgo", wrapper,
 			}
 			args = append(args, tt.dimension...)
-			cmd := exec.Command(daemonBin, args...)
-			cmd.Env = append(environmentWithoutTelemetryDimensions(), "PORTOLAN_START_MARKER="+marker)
-			output, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("daemon accepted invalid telemetry dimensions: %s", output)
-			}
-			if !strings.Contains(string(output), tt.wantError) {
-				t.Fatalf("startup error %q does not identify %s", output, tt.wantError)
-			}
-			for _, path := range []string{marker, telemetryPath, socketPath} {
-				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-					t.Errorf("runtime artifact %s exists after configuration rejection: %v", path, statErr)
-				}
-			}
+			testinfra.AssertDaemonStartupFailure(t, testinfra.StartupFailureConfig{
+				Binary:      daemonBin,
+				Args:        args,
+				Env:         map[string]string{"PORTOLAN_START_MARKER": marker},
+				OmitEnv:     []string{"PORTOLAN_SESSION_ID", "PORTOLAN_GRAPH_MODE"},
+				WantError:   tt.wantError,
+				AbsentPaths: []string{marker, telemetryPath, socketPath},
+			})
 		})
 	}
-}
-
-func environmentWithoutTelemetryDimensions() []string {
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "PORTOLAN_SESSION_ID" && key != "PORTOLAN_GRAPH_MODE" {
-			env = append(env, entry)
-		}
-	}
-	return env
 }
 
 func TestMCPStdinDisconnectShutsDownEverything(t *testing.T) {

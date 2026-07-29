@@ -18,7 +18,10 @@ import (
 )
 
 func parseValidTestConfig(args []string, output io.Writer) (core.Config, error) {
-	return parseConfigWithOutput(append(args, "--session-id", "test-session"), output)
+	return parseConfigWithOutput(append(args,
+		"--session-id", "test-session",
+		"--graph-mode", core.GraphModeGraph,
+	), output)
 }
 
 func TestJoinStartupErrorsPreservesPrimaryAndCleanupFailures(t *testing.T) {
