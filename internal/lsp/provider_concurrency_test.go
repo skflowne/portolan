@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/skflowne/portolan/internal/core"
 )
 
 func newOpenUnitProvider(reader func(context.Context, string) ([]byte, error), writer *recordingWriteCloser) *Provider {
@@ -84,6 +86,44 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 	p.openMu.Unlock()
 	if transition == nil || transition.err != nil {
 		t.Fatalf("open transition = %+v, want permanent success", transition)
+	}
+}
+
+func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	text := "interface Callable {\n  (value: number): string;\n}\n"
+	reads := 0
+	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
+		reads++
+		return []byte(text), nil
+	}, writer)
+
+	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
+		t.Fatalf("ensureOpen: %v", err)
+	}
+	text = "const changed = 1;\n"
+
+	symbols := []core.Symbol{{
+		Name: "()",
+		Kind: "method",
+		Range: core.Range{
+			Start: core.Position{Line: 1, Character: 2},
+			End:   core.Position{Line: 1, Character: 26},
+		},
+		SelRange: core.Range{
+			Start: core.Position{Line: 1, Character: 2},
+			End:   core.Position{Line: 1, Character: 2},
+		},
+	}}
+	got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", symbols)
+	if err != nil {
+		t.Fatalf("SymbolSignatures: %v", err)
+	}
+	if len(got) != 1 || got[0] != "(value: number): string" {
+		t.Fatalf("signatures = %q, want didOpen snapshot declaration", got)
+	}
+	if reads != 1 {
+		t.Fatalf("file reads = %d, want one", reads)
 	}
 }
 

@@ -1,6 +1,6 @@
 // Package lsp implements core.LanguageProvider against tsgo --lsp -stdio, the
 // native-preview TypeScript language server. It adapts LSP navigation and
-// semantic presentation data into core types without caching or graph-building.
+// semantic presentation data into core types without graph-building.
 package lsp
 
 import (
@@ -149,6 +149,7 @@ func (p *Provider) prepareOpen(ctx context.Context, file string) (canonicalFile,
 
 type openTransition struct {
 	done      chan struct{}
+	source    string
 	err       error
 	retryable bool
 }
@@ -214,8 +215,9 @@ func (p *Provider) ensureOpen(ctx context.Context, canonicalFile string) error {
 			}
 		}
 
-		err, retryable := p.openFile(ctx, canonicalFile)
+		source, err, retryable := p.openFile(ctx, canonicalFile)
 		p.openMu.Lock()
+		transition.source = source
 		transition.err = err
 		transition.retryable = retryable
 		if err != nil {
@@ -227,14 +229,14 @@ func (p *Provider) ensureOpen(ctx context.Context, canonicalFile string) error {
 	}
 }
 
-func (p *Provider) openFile(ctx context.Context, canonicalFile string) (error, bool) {
+func (p *Provider) openFile(ctx context.Context, canonicalFile string) (string, error, bool) {
 	uri, err := pathnorm.PathToURI(canonicalFile)
 	if err != nil {
-		return fmt.Errorf("lsp: encoding path %q: %w", canonicalFile, err), false
+		return "", fmt.Errorf("lsp: encoding path %q: %w", canonicalFile, err), false
 	}
 	text, err := p.readFileContext(ctx, canonicalFile)
 	if err != nil {
-		return fmt.Errorf("lsp: reading %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
+		return "", fmt.Errorf("lsp: reading %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
 	}
 	params := didOpenParams{
 		TextDocument: textDocumentItem{
@@ -245,9 +247,24 @@ func (p *Provider) openFile(ctx context.Context, canonicalFile string) (error, b
 		},
 	}
 	if err := p.transport.notify(ctx, "textDocument/didOpen", params); err != nil {
-		return fmt.Errorf("lsp: didOpen %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
+		return "", fmt.Errorf("lsp: didOpen %s: %w", canonicalFile, err), p.retryableOpenError(ctx, err)
 	}
-	return nil, false
+	return text, nil, false
+}
+
+func (p *Provider) openedSource(canonicalFile string) (string, bool) {
+	p.openMu.Lock()
+	defer p.openMu.Unlock()
+	transition, ok := p.openFiles[canonicalFile]
+	if !ok || transition.err != nil {
+		return "", false
+	}
+	select {
+	case <-transition.done:
+		return transition.source, true
+	default:
+		return "", false
+	}
 }
 
 func (p *Provider) retryableOpenError(ctx context.Context, err error) bool {
