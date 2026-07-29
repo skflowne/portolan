@@ -118,8 +118,8 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 
 	projectRoot := fs.String("project-root", "", "absolute root of the analyzed project (default current working directory)")
 	jsonlPath := fs.String("jsonl", "", "path to write the telemetry JSONL stream to")
-	sessionID := fs.String("session-id", envOr("PORTOLAN_SESSION_ID", ""), "session id tagging every telemetry event")
-	graphMode := fs.String("graph-mode", envOr("PORTOLAN_GRAPH_MODE", "graph"), `eval axis: "graph" or "no-graph"`)
+	sessionID := fs.String("session-id", envOr("PORTOLAN_SESSION_ID", ""), "non-empty session id tagging every telemetry event")
+	graphMode := fs.String("graph-mode", envOr("PORTOLAN_GRAPH_MODE", core.DefaultGraphMode), `eval axis: "graph" or "no-graph"`)
 	controlSocket := fs.String("control-socket", "", "control-socket path (empty uses the project-keyed default)")
 	tsgoPath := fs.String("tsgo", "tsgo", "tsgo executable (resolved on PATH if not absolute)")
 	maxResults := fs.Int("max-results", 0, "cap applied to every list-returning tool result (0 = default)")
@@ -128,11 +128,11 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 		return core.Config{}, err
 	}
 
-	projectRootSet := false
+	setFlags := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) {
-		projectRootSet = projectRootSet || f.Name == "project-root"
+		setFlags[f.Name] = true
 	})
-	if !projectRootSet {
+	if !setFlags["project-root"] {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return core.Config{}, fmt.Errorf("portoland: resolving --project-root default from current working directory: %w", err)
@@ -153,7 +153,7 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 		return core.Config{}, err
 	}
 
-	return core.Config{
+	cfg := core.Config{
 		ProjectRoot:   canonicalRoot,
 		SessionID:     *sessionID,
 		GraphMode:     *graphMode,
@@ -161,7 +161,33 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 		JSONLPath:     canonicalJSONL,
 		ControlSocket: canonicalControlSocket,
 		MaxResults:    *maxResults,
-	}, nil
+	}
+	if err := cfg.ValidateTelemetryDimensions(); err != nil {
+		return core.Config{}, telemetryDimensionError(err, setFlags)
+	}
+	return cfg, nil
+}
+
+func telemetryDimensionError(err error, setFlags map[string]bool) error {
+	var source string
+	switch {
+	case errors.Is(err, core.ErrInvalidSessionID) && setFlags["session-id"]:
+		source = "--session-id"
+	case errors.Is(err, core.ErrInvalidSessionID) && envIsSet("PORTOLAN_SESSION_ID"):
+		source = "PORTOLAN_SESSION_ID"
+	case errors.Is(err, core.ErrInvalidGraphMode) && setFlags["graph-mode"]:
+		source = "--graph-mode"
+	case errors.Is(err, core.ErrInvalidGraphMode) && envIsSet("PORTOLAN_GRAPH_MODE"):
+		source = "PORTOLAN_GRAPH_MODE"
+	default:
+		source = "telemetry dimensions"
+	}
+	return fmt.Errorf("portoland: validating %s: %w", source, err)
+}
+
+func envIsSet(key string) bool {
+	_, ok := os.LookupEnv(key)
+	return ok
 }
 
 func canonicalOptionalFlagPath(name, value string) (string, error) {

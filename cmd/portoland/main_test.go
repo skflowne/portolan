@@ -13,8 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skflowne/portolan/internal/core"
 	pmcp "github.com/skflowne/portolan/internal/mcp"
 )
+
+func parseValidTestConfig(args []string, output io.Writer) (core.Config, error) {
+	return parseConfigWithOutput(append(args, "--session-id", "test-session"), output)
+}
 
 func TestJoinStartupErrorsPreservesPrimaryAndCleanupFailures(t *testing.T) {
 	primary := errors.New("provider start failed")
@@ -79,7 +84,7 @@ func TestParseConfigCanonicalizesProjectIdentityAndDerivedKeys(t *testing.T) {
 		`\\wsl$\Ubuntu\mnt\c\Users\me\repo`,
 		`\\wsl.localhost\Ubuntu\mnt\c\Users\me\repo`,
 	} {
-		cfg, err := parseConfigWithOutput([]string{"--project-root", input}, io.Discard)
+		cfg, err := parseValidTestConfig([]string{"--project-root", input}, io.Discard)
 		if err != nil {
 			t.Fatalf("parseConfigWithOutput(--project-root %q): %v", input, err)
 		}
@@ -94,7 +99,7 @@ func TestParseConfigCanonicalizesProjectIdentityAndDerivedKeys(t *testing.T) {
 		}
 	}
 
-	other, err := parseConfigWithOutput([]string{"--project-root", "/mnt/d/Users/me/repo"}, io.Discard)
+	other, err := parseValidTestConfig([]string{"--project-root", "/mnt/d/Users/me/repo"}, io.Discard)
 	if err != nil {
 		t.Fatalf("parseConfigWithOutput(second identity): %v", err)
 	}
@@ -121,7 +126,7 @@ func TestParseConfigDefaultsProjectRootToCanonicalWorkingDirectory(t *testing.T)
 		}
 	})
 
-	cfg, err := parseConfigWithOutput(nil, io.Discard)
+	cfg, err := parseValidTestConfig(nil, io.Discard)
 	if err != nil {
 		t.Fatalf("parseConfigWithOutput: %v", err)
 	}
@@ -151,7 +156,7 @@ func TestParseConfigReportsUnavailableDefaultWorkingDirectory(t *testing.T) {
 		t.Fatalf("Remove(%q): %v", root, err)
 	}
 
-	_, err = parseConfigWithOutput(nil, io.Discard)
+	_, err = parseValidTestConfig(nil, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "--project-root") {
 		t.Fatalf("parseConfigWithOutput error = %v, want --project-root working-directory error", err)
 	}
@@ -167,7 +172,7 @@ func TestParseConfigRejectsInvalidProjectRoots(t *testing.T) {
 		`\\wsl$\Debian\home\me\repo`,
 		"/home/me/repo\x00bad",
 	} {
-		_, err := parseConfigWithOutput([]string{"--project-root", input}, io.Discard)
+		_, err := parseValidTestConfig([]string{"--project-root", input}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "--project-root") {
 			t.Errorf("parseConfigWithOutput(--project-root %q) error = %v, want flag-specific error", input, err)
 		}
@@ -185,7 +190,7 @@ func TestParseConfigCanonicalizesExplicitOperationalPaths(t *testing.T) {
 	}
 	for _, flagName := range []string{"jsonl", "control-socket"} {
 		for _, input := range inputs {
-			cfg, err := parseConfigWithOutput([]string{"--project-root", "/repo", "--" + flagName, input}, io.Discard)
+			cfg, err := parseValidTestConfig([]string{"--project-root", "/repo", "--" + flagName, input}, io.Discard)
 			if err != nil {
 				t.Fatalf("parseConfigWithOutput(--%s %q): %v", flagName, input, err)
 			}
@@ -211,7 +216,7 @@ func TestParseConfigRejectsInvalidExplicitOperationalPaths(t *testing.T) {
 			`\\wsl.localhost\Debian\home\me\state`,
 			"/tmp/state\x00bad",
 		} {
-			_, err := parseConfigWithOutput([]string{"--project-root", "/repo", "--" + flagName, input}, io.Discard)
+			_, err := parseValidTestConfig([]string{"--project-root", "/repo", "--" + flagName, input}, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), "--"+flagName) {
 				t.Errorf("parseConfigWithOutput(--%s %q) error = %v, want flag-specific error", flagName, input, err)
 			}
@@ -220,7 +225,7 @@ func TestParseConfigRejectsInvalidExplicitOperationalPaths(t *testing.T) {
 }
 
 func TestParseConfigPreservesEmptyOptionalPathDefaults(t *testing.T) {
-	cfg, err := parseConfigWithOutput([]string{
+	cfg, err := parseValidTestConfig([]string{
 		"--project-root", "/repo",
 		"--jsonl=",
 		"--control-socket=",
@@ -230,5 +235,81 @@ func TestParseConfigPreservesEmptyOptionalPathDefaults(t *testing.T) {
 	}
 	if cfg.JSONLPath != "" || cfg.ControlSocket != "" {
 		t.Fatalf("optional paths = (%q, %q), want both empty", cfg.JSONLPath, cfg.ControlSocket)
+	}
+}
+
+func TestParseConfigTelemetryDimensionPrecedence(t *testing.T) {
+	tests := []struct {
+		name         string
+		sessionEnv   *string
+		graphModeEnv *string
+		args         []string
+		wantSession  string
+		wantMode     string
+		wantError    string
+	}{
+		{name: "graph default", sessionEnv: stringPointer("environment-session"), wantSession: "environment-session", wantMode: "graph"},
+		{name: "environment values", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("no-graph"), wantSession: "environment-session", wantMode: "no-graph"},
+		{name: "flags override environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("graph"), args: []string{"--session-id", "flag-session", "--graph-mode", "no-graph"}, wantSession: "flag-session", wantMode: "no-graph"},
+		{name: "valid graph flag overrides invalid environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("invalid"), args: []string{"--graph-mode", "graph"}, wantSession: "environment-session", wantMode: "graph"},
+		{name: "invalid graph flag overrides valid environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("graph"), args: []string{"--graph-mode", "invalid"}, wantError: "--graph-mode"},
+		{name: "empty graph flag overrides valid environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("graph"), args: []string{"--graph-mode="}, wantError: "--graph-mode"},
+		{name: "invalid graph environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer("invalid"), wantError: "PORTOLAN_GRAPH_MODE"},
+		{name: "empty graph environment", sessionEnv: stringPointer("environment-session"), graphModeEnv: stringPointer(""), wantError: "PORTOLAN_GRAPH_MODE"},
+		{name: "missing session", wantError: "session ID"},
+		{name: "empty session environment", sessionEnv: stringPointer(""), wantError: "PORTOLAN_SESSION_ID"},
+		{name: "whitespace session environment", sessionEnv: stringPointer(" \t"), wantError: "PORTOLAN_SESSION_ID"},
+		{name: "valid session flag overrides empty environment", sessionEnv: stringPointer(""), args: []string{"--session-id", "flag-session"}, wantSession: "flag-session", wantMode: "graph"},
+		{name: "empty session flag overrides valid environment", sessionEnv: stringPointer("environment-session"), args: []string{"--session-id="}, wantError: "--session-id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOptionalEnv(t, "PORTOLAN_SESSION_ID", tt.sessionEnv)
+			setOptionalEnv(t, "PORTOLAN_GRAPH_MODE", tt.graphModeEnv)
+			args := append([]string{"--project-root", "/repo"}, tt.args...)
+			cfg, err := parseConfigWithOutput(args, io.Discard)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("parseConfigWithOutput error = %v, want error containing %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseConfigWithOutput: %v", err)
+			}
+			if cfg.SessionID != tt.wantSession || cfg.GraphMode != tt.wantMode {
+				t.Fatalf("telemetry dimensions = (%q, %q), want (%q, %q)", cfg.SessionID, cfg.GraphMode, tt.wantSession, tt.wantMode)
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func setOptionalEnv(t *testing.T, key string, value *string) {
+	t.Helper()
+	original, existed := os.LookupEnv(key)
+	t.Cleanup(func() {
+		if existed {
+			if err := os.Setenv(key, original); err != nil {
+				t.Errorf("restoring %s: %v", key, err)
+			}
+			return
+		}
+		if err := os.Unsetenv(key); err != nil {
+			t.Errorf("unsetting %s during cleanup: %v", key, err)
+		}
+	})
+	if value == nil {
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unsetting %s: %v", key, err)
+		}
+		return
+	}
+	if err := os.Setenv(key, *value); err != nil {
+		t.Fatalf("setting %s: %v", key, err)
 	}
 }

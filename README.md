@@ -21,6 +21,10 @@ on stderr. The current control protocol's `sync <file>` command only bumps the s
 it does not yet run a blocking hook, send LSP `didChange`/`didSave`, or wait for settle detection.
 **Phase 1 (the blocking staleness barrier) is next.**
 
+Every daemon requires a non-empty telemetry session identity through `--session-id` or
+`PORTOLAN_SESSION_ID`. Graph mode defaults to `graph`; `--graph-mode` / `PORTOLAN_GRAPH_MODE`
+accept only `graph` or `no-graph`, with flags taking precedence over environment values.
+
 Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or the standard base
 `OTEL_EXPORTER_OTLP_ENDPOINT`) to enable the OTLP/HTTP mirror. With neither configured, the daemon
 runs JSONL-only and never connects to an implicit collector.
