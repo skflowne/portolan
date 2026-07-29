@@ -125,6 +125,7 @@ func TestTierA(t *testing.T) {
 	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, &got.ReferencesCircle)
 	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, &got.DefinitionTotalArea)
 	callInto(t, daemon.sess, "get_outline", map[string]any{"file": mainTS}, &got.OutlineMain)
+	callInto(t, daemon.sess, "get_outline", map[string]any{"file": "relative.ts"}, &got.OutlineInvalidFile)
 	normalizeContractPaths(t, &got)
 	if err := validatePinnedContract(got, want); err != nil {
 		t.Fatal(err)

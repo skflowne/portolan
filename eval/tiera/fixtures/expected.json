@@ -52,10 +52,19 @@
     "truncated": false,
     "freshness": {"generation": 0, "stale": false}
   },
+  "outline_invalid_file": {
+    "found": false,
+    "symbols": null,
+    "truncated": false,
+    "freshness": {"generation": 0, "stale": false},
+    "message": "file must be an absolute Linux/WSL path, Windows drive path, or same-distro WSL UNC path",
+    "error": "invalid file path"
+  },
   "telemetry": [
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 13, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_references", "session_id": "tiera", "graph_mode": "graph", "result_size": 4, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_definition", "session_id": "tiera", "graph_mode": "graph", "result_size": 1, "truncated": false, "generation": 0, "stale": false},
-    {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 7, "truncated": false, "generation": 0, "stale": false}
+    {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 7, "truncated": false, "generation": 0, "stale": false},
+    {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 0, "truncated": false, "generation": 0, "stale": false, "err": "invalid file path"}
   ]
 }

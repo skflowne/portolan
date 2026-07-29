@@ -22,6 +22,7 @@ type pinnedContract struct {
 	ReferencesCircle    tools.FindReferencesOutput `json:"references_circle"`
 	OutlineGeometry     tools.GetOutlineOutput     `json:"outline_geometry"`
 	OutlineMain         tools.GetOutlineOutput     `json:"outline_main"`
+	OutlineInvalidFile  tools.GetOutlineOutput     `json:"outline_invalid_file"`
 	Telemetry           []expectedEvent            `json:"telemetry"`
 }
 
@@ -33,6 +34,7 @@ type expectedEvent struct {
 	Truncated  bool   `json:"truncated"`
 	Generation uint64 `json:"generation"`
 	Stale      bool   `json:"stale"`
+	Err        string `json:"err,omitempty"`
 }
 
 func loadPinnedContract(t *testing.T) pinnedContract {
@@ -87,6 +89,7 @@ func validatePinnedContract(got, want pinnedContract) error {
 		{"references_circle", got.ReferencesCircle, want.ReferencesCircle},
 		{"outline_geometry", got.OutlineGeometry, want.OutlineGeometry},
 		{"outline_main", got.OutlineMain, want.OutlineMain},
+		{"outline_invalid_file", got.OutlineInvalidFile, want.OutlineInvalidFile},
 	}
 	for _, check := range checks {
 		if err := contractMismatch(check.path, check.got, check.want); err != nil {
@@ -100,8 +103,13 @@ func validateTelemetry(events []map[string]any, want []expectedEvent) error {
 	if len(events) != len(want) {
 		return fmt.Errorf("telemetry: records = %d, want %d", len(events), len(want))
 	}
-	required := []string{"duration_ms", "generation", "graph_mode", "result_size", "session_id", "stale", "tool", "truncated", "ts"}
+	baseRequired := []string{"duration_ms", "generation", "graph_mode", "result_size", "session_id", "stale", "tool", "truncated", "ts"}
 	for i, event := range events {
+		required := append([]string(nil), baseRequired...)
+		if want[i].Err != "" {
+			required = append(required, "err")
+			sort.Strings(required)
+		}
 		keys := make([]string, 0, len(event))
 		for key := range event {
 			keys = append(keys, key)
@@ -251,6 +259,8 @@ func TestPinnedContractRejectsMutations(t *testing.T) {
 		{name: "wrong graph tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["graph_mode"] = "no-graph" }},
 		{name: "wrong result size", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["result_size"] = json.Number("12") }},
 		{name: "unexpected error", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["err"] = "wrong call" }},
+		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[4], "err") }},
+		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[4]["err"] = "other failure" }},
 		{name: "missing timestamp", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[0], "ts") }},
 	}
 	for _, tt := range tests {
