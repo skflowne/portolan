@@ -114,9 +114,13 @@ func assertProtocolOnlyStdout(t *testing.T, raw []byte) {
 
 func readExactTelemetryEvent(t *testing.T, path string) map[string]any {
 	t.Helper()
-	lines := readJSONL(t, path)
-	if len(lines) != 1 {
-		t.Fatalf("JSONL records = %d, want exactly 1: %v", len(lines), lines)
+	lines, err := testinfra.WaitForQuiescentJSONL(path, 1, testinfra.ShortWait, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expectedEvent{Tool: "get_outline", SessionID: "telemetry-integration", GraphMode: "no-graph", ResultSize: 13}
+	if err := validateTelemetry(lines, []expectedEvent{want}); err != nil {
+		t.Fatal(err)
 	}
 	return lines[0]
 }
