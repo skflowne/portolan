@@ -2,28 +2,18 @@ package lsp
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/skflowne/portolan/internal/pathnorm"
 )
 
-// uriFromPath encodes an already host-normalized absolute path for the LSP
-// wire. net/url preserves the required escaping of spaces and other special
-// characters.
-func uriFromPath(absPath string) string {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absPath)}
-	return u.String()
-}
-
 func pathFromURI(uri string) (string, error) {
-	u, err := url.Parse(uri)
+	path, err := pathnorm.URIToPath(uri)
 	if err != nil {
-		return "", fmt.Errorf("lsp: parsing uri %q: %w", uri, err)
+		return "", fmt.Errorf("lsp: decoding location URI %q: %w", uri, err)
 	}
-	if u.Scheme != "file" {
-		return "", fmt.Errorf("lsp: unsupported uri scheme %q in %q", u.Scheme, uri)
-	}
-	return u.Path, nil
+	return path, nil
 }
 
 func languageIDForFile(path string) string {
