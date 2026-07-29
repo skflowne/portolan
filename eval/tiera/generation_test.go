@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skflowne/portolan/eval/testinfra"
 	"github.com/skflowne/portolan/internal/tools"
 )
 
@@ -42,6 +43,20 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 	var after tools.GetOutlineOutput
 	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, &after)
 	assertOutlineGeneration(t, after, 1)
+
+	stopDaemon(t, d)
+	events, err := testinfra.WaitForQuiescentJSONL(d.jsonl, 2, testinfra.ShortWait, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEvents := []expectedEvent{
+		{Tool: "get_outline", SessionID: "generation-propagation", GraphMode: "graph", ResultSize: 13},
+		{Tool: "get_outline", SessionID: "generation-propagation", GraphMode: "graph", ResultSize: 13, Generation: 1},
+	}
+	if err := validateTelemetry(events, wantEvents); err != nil {
+		t.Fatal(err)
+	}
+	assertProtocolOnlyStdout(t, d.proc.StdoutBytes())
 }
 
 func assertOutlineGeneration(t *testing.T, out tools.GetOutlineOutput, want uint64) {

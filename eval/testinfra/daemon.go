@@ -68,6 +68,7 @@ type Config struct {
 	Telemetry     string
 	SessionID     string
 	GraphMode     string
+	MaxResults    int
 	ControlSocket string
 	Env           map[string]string
 }
@@ -142,6 +143,9 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 		"--session-id", cfg.SessionID,
 		"--graph-mode", cfg.GraphMode,
 		"--tsgo", wrapper,
+	}
+	if cfg.MaxResults > 0 {
+		args = append(args, "--max-results", strconv.Itoa(cfg.MaxResults))
 	}
 	if cfg.ControlSocket != "" {
 		args = append(args, "--control-socket", cfg.ControlSocket)

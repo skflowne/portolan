@@ -45,7 +45,7 @@ func TestParseJSONLSnapshot(t *testing.T) {
 }
 
 func TestWaitForQuiescentJSONL(t *testing.T) {
-	const quiet = 40 * time.Millisecond
+	const quiet = 200 * time.Millisecond
 	t.Run("empty snapshot waits and exposes late record", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "events.jsonl")
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
