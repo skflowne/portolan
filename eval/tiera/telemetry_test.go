@@ -73,10 +73,11 @@ func startTelemetryDaemon(t *testing.T, endpoint string) (*testinfra.Daemon, *mc
 
 func callOneTelemetryTool(t *testing.T, sess *mcp.ClientSession) {
 	t.Helper()
+	want := loadPinnedContract(t)
 	var out tools.GetOutlineOutput
 	callInto(t, sess, "get_outline", map[string]any{
 		"file": filepath.Join(testinfra.FixtureRoot(), "src", "geometry.ts"),
-	}, &out)
+	}, expectedStructuredOutput(t, want, "outline_geometry"), &out)
 	if !out.Found {
 		t.Fatalf("expected outline result: %+v", out)
 	}

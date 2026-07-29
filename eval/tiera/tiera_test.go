@@ -4,7 +4,6 @@ package tiera
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,7 +75,7 @@ func fixtureRoot(t *testing.T) string {
 	return testinfra.FixtureRoot()
 }
 
-func callInto(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any, out any) {
+func callInto(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any, want, out any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -87,12 +86,8 @@ func callInto(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	if res.IsError {
 		t.Fatalf("%s: tool reported protocol error: %+v", name, res.Content)
 	}
-	raw, err := json.Marshal(res.StructuredContent)
-	if err != nil {
-		t.Fatalf("%s: marshaling structured content: %v", name, err)
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		t.Fatalf("%s: decoding output: %v (raw=%s)", name, err, raw)
+	if err := decodeStructuredOutput(name, res.StructuredContent, want, out); err != nil {
+		t.Fatalf("%s structured output: %v", name, err)
 	}
 }
 
@@ -121,11 +116,11 @@ func TestTierA(t *testing.T) {
 		}
 	})
 
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, &got.OutlineGeometry)
-	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, &got.ReferencesCircle)
-	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, &got.DefinitionTotalArea)
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": mainTS}, &got.OutlineMain)
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": "relative.ts"}, &got.OutlineInvalidFile)
+	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, expectedStructuredOutput(t, want, "outline_geometry"), &got.OutlineGeometry)
+	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, expectedStructuredOutput(t, want, "references_circle"), &got.ReferencesCircle)
+	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, expectedStructuredOutput(t, want, "definition_total_area"), &got.DefinitionTotalArea)
+	callInto(t, daemon.sess, "get_outline", map[string]any{"file": mainTS}, expectedStructuredOutput(t, want, "outline_main"), &got.OutlineMain)
+	callInto(t, daemon.sess, "get_outline", map[string]any{"file": "relative.ts"}, expectedStructuredOutput(t, want, "outline_invalid_file"), &got.OutlineInvalidFile)
 	normalizeContractPaths(t, &got)
 	if err := validatePinnedContract(got, want); err != nil {
 		t.Fatal(err)
@@ -154,11 +149,15 @@ func TestTierAOutlineTruncation(t *testing.T) {
 		MaxResults:    cap,
 	})
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
+	pinned := loadPinnedContract(t)
+	rawWant := expectedStructuredOutput(t, pinned, "outline_geometry").(map[string]any)
+	rawWant["symbols"] = rawWant["symbols"].([]any)[:cap]
+	rawWant["truncated"] = true
 	var got pinnedContract
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, &got.OutlineGeometry)
+	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, rawWant, &got.OutlineGeometry)
 	normalizeContractPaths(t, &got)
 
-	want := pinnedContract{OutlineGeometry: loadPinnedContract(t).OutlineGeometry}
+	want := pinnedContract{OutlineGeometry: pinned.OutlineGeometry}
 	want.OutlineGeometry.Symbols = want.OutlineGeometry.Symbols[:cap]
 	want.OutlineGeometry.Truncated = true
 	if err := validatePinnedContract(got, want); err != nil {
