@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -230,6 +231,40 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 	}
 }
 
+func TestProviderStageRejectsSuccessAfterConcurrentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	result := make(chan struct {
+		locations []core.Location
+		err       error
+	}, 1)
+
+	go func() {
+		locations, err := runProviderStage(ctx, func(context.Context) ([]core.Location, error) {
+			close(entered)
+			<-release
+			return []core.Location{{File: "/repo/main.go"}}, nil
+		})
+		result <- struct {
+			locations []core.Location
+			err       error
+		}{locations: locations, err: err}
+	}()
+
+	<-entered
+	cancel()
+	<-ctx.Done()
+	close(release)
+	got := <-result
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("error = %v, want %v", got.err, context.Canceled)
+	}
+	if got.locations != nil {
+		t.Fatalf("locations = %+v, want nil", got.locations)
+	}
+}
+
 func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 	file := "/repo/main.go"
 	type result struct {
@@ -248,6 +283,10 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 		out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
 		return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
 	}
+	outlineCall := func(ctx context.Context, tl *Tools) result {
+		out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
+		return result{out.Found, out.Truncated, len(out.Symbols), out.Error, out.Message, err}
+	}
 	cases := []struct {
 		name        string
 		cancelStage string
@@ -258,14 +297,8 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 		{name: "definition_result", cancelStage: "definition", secondCalls: 1, call: definitionCall},
 		{name: "references_symbols", cancelStage: "symbols", call: referencesCall},
 		{name: "references_result", cancelStage: "references", secondCalls: 1, call: referencesCall},
-		{
-			name:        "outline_symbols",
-			cancelStage: "symbols",
-			call: func(ctx context.Context, tl *Tools) result {
-				out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
-				return result{out.Found, out.Truncated, len(out.Symbols), out.Error, out.Message, err}
-			},
-		},
+		{name: "outline_symbols", cancelStage: "symbols", call: outlineCall},
+		{name: "outline_signatures", cancelStage: "signatures", call: outlineCall},
 	}
 
 	for _, tc := range cases {
@@ -389,6 +422,9 @@ func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) (
 }
 
 func (p *cancelingResultProvider) SymbolSignatures(_ context.Context, _ string, symbols []core.Symbol) ([]string, error) {
+	if p.cancelStage == "signatures" {
+		p.cancel()
+	}
 	return existingSignatures(symbols), nil
 }
 

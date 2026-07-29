@@ -55,10 +55,9 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = failure.message
 			return
 		}
-		symbols, err := t.Provider.DocumentSymbols(ctx, file)
-		if err == nil {
-			err = ctx.Err()
-		}
+		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Symbol, error) {
+			return t.Provider.DocumentSymbols(ctx, file)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("failed to load symbols for %s", file)
@@ -75,10 +74,9 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = fmt.Sprintf("operation canceled while shaping outline for %s", file)
 			return
 		}
-		signatures, err := t.Provider.SymbolSignatures(ctx, file, flat.originals)
-		if err == nil {
-			err = ctx.Err()
-		}
+		signatures, err := runProviderStage(ctx, func(ctx context.Context) ([]string, error) {
+			return t.Provider.SymbolSignatures(ctx, file, flat.originals)
+		})
 		if err != nil {
 			out.Error = err.Error()
 			out.Message = fmt.Sprintf("failed to load symbol signatures for %s", file)
