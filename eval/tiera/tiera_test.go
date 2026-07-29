@@ -44,6 +44,7 @@ func startDaemon(t *testing.T, sessionID, socket string) *daemonProcess {
 		ProjectRoot:   testinfra.FixtureRoot(),
 		Telemetry:     jsonl,
 		SessionID:     sessionID,
+		GraphMode:     "graph",
 		ControlSocket: socket,
 	})
 	sess := testinfra.ConnectMCP(t, proc, sessionID)

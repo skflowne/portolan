@@ -67,6 +67,7 @@ type Config struct {
 	ProjectRoot   string
 	Telemetry     string
 	SessionID     string
+	GraphMode     string
 	ControlSocket string
 	Env           map[string]string
 }
@@ -129,14 +130,11 @@ func NewDaemon(t *testing.T, cfg Config) *Daemon {
 	if cfg.Telemetry == "" {
 		cfg.Telemetry = filepath.Join(dir, "telemetry.jsonl")
 	}
-	if cfg.SessionID == "" {
-		cfg.SessionID = "eval"
-	}
 	args := []string{
 		"--project-root", cfg.ProjectRoot,
 		"--jsonl", cfg.Telemetry,
 		"--session-id", cfg.SessionID,
-		"--graph-mode", "graph",
+		"--graph-mode", cfg.GraphMode,
 		"--tsgo", wrapper,
 	}
 	if cfg.ControlSocket != "" {
