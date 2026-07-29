@@ -96,10 +96,6 @@ func validatePrivateDir(path string) error {
 }
 
 func ownershipLockPath(socketPath string) string {
-	absolute, err := filepath.Abs(socketPath)
-	if err != nil {
-		absolute = socketPath
-	}
-	sum := sha256.Sum256([]byte(absolute))
+	sum := sha256.Sum256([]byte(socketPath))
 	return filepath.Join(controlRuntimeDir(), fmt.Sprintf("lock-%s", hex.EncodeToString(sum[:])[:24]))
 }

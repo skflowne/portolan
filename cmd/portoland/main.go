@@ -19,6 +19,7 @@ import (
 	"github.com/skflowne/portolan/internal/core"
 	"github.com/skflowne/portolan/internal/lsp"
 	pmcp "github.com/skflowne/portolan/internal/mcp"
+	"github.com/skflowne/portolan/internal/pathnorm"
 	"github.com/skflowne/portolan/internal/telemetry"
 	"github.com/skflowne/portolan/internal/tools"
 )
@@ -115,12 +116,7 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 	fs := flag.NewFlagSet("portoland", flag.ContinueOnError)
 	fs.SetOutput(output)
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
-
-	projectRoot := fs.String("project-root", cwd, "absolute root of the analyzed project")
+	projectRoot := fs.String("project-root", "", "absolute root of the analyzed project (default current working directory)")
 	jsonlPath := fs.String("jsonl", "", "path to write the telemetry JSONL stream to")
 	sessionID := fs.String("session-id", envOr("PORTOLAN_SESSION_ID", ""), "session id tagging every telemetry event")
 	graphMode := fs.String("graph-mode", envOr("PORTOLAN_GRAPH_MODE", "graph"), `eval axis: "graph" or "no-graph"`)
@@ -132,20 +128,55 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 		return core.Config{}, err
 	}
 
-	abs, err := filepath.Abs(*projectRoot)
+	projectRootSet := false
+	fs.Visit(func(f *flag.Flag) {
+		projectRootSet = projectRootSet || f.Name == "project-root"
+	})
+	if !projectRootSet {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return core.Config{}, fmt.Errorf("portoland: resolving --project-root default from current working directory: %w", err)
+		}
+		*projectRoot = cwd
+	}
+
+	canonicalRoot, err := canonicalFlagPath("project-root", *projectRoot)
 	if err != nil {
-		return core.Config{}, fmt.Errorf("portoland: resolving --project-root %q: %w", *projectRoot, err)
+		return core.Config{}, err
+	}
+	canonicalJSONL, err := canonicalOptionalFlagPath("jsonl", *jsonlPath)
+	if err != nil {
+		return core.Config{}, err
+	}
+	canonicalControlSocket, err := canonicalOptionalFlagPath("control-socket", *controlSocket)
+	if err != nil {
+		return core.Config{}, err
 	}
 
 	return core.Config{
-		ProjectRoot:   abs,
+		ProjectRoot:   canonicalRoot,
 		SessionID:     *sessionID,
 		GraphMode:     *graphMode,
 		TsgoPath:      *tsgoPath,
-		JSONLPath:     *jsonlPath,
-		ControlSocket: *controlSocket,
+		JSONLPath:     canonicalJSONL,
+		ControlSocket: canonicalControlSocket,
 		MaxResults:    *maxResults,
 	}, nil
+}
+
+func canonicalOptionalFlagPath(name, value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	return canonicalFlagPath(name, value)
+}
+
+func canonicalFlagPath(name, value string) (string, error) {
+	canonical, err := pathnorm.Canonicalize(value)
+	if err != nil {
+		return "", fmt.Errorf("portoland: validating --%s %q: %w", name, value, err)
+	}
+	return canonical, nil
 }
 
 type cleanupError struct {
