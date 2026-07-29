@@ -42,21 +42,19 @@ func (c Config) Cap() int {
 	return c.MaxResults
 }
 
-// GenerationCounter is the Phase 0 freshness source: a monotonic counter. The
-// staleness barrier (Phase 1) will bump it on every observed edit; for now it
-// only ever reads the current value and stamps Stale=false.
+// GenerationCounter orders control-socket sync commands so tool results can
+// identify the shared source generation they observed.
 type GenerationCounter struct {
 	n atomic.Uint64
 }
 
-// Current returns a Freshness snapshot at the current generation. Phase 0 is
-// always fresh.
+// Current returns the current generation with Stale=false because this counter
+// tracks sync ordering, not per-file dirty state.
 func (g *GenerationCounter) Current() Freshness {
 	return Freshness{Generation: g.n.Load(), Stale: false}
 }
 
-// Bump advances the generation (used by the Phase 1 barrier) and returns the
-// new value.
+// Bump atomically advances the generation and returns the new value.
 func (g *GenerationCounter) Bump() uint64 {
 	return g.n.Add(1)
 }

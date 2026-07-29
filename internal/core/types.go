@@ -47,19 +47,16 @@ type Symbol struct {
 	Children  []Symbol   `json:"children,omitempty"`
 }
 
-// Freshness is stamped on every tool result. In Phase 0 the barrier does not
-// exist yet, so Generation comes from a monotonic counter and Stale is always
-// false — but the fields ship from day one so downstream (model, eval) can rely
-// on them, and Phase 1 only has to start setting Stale truthfully.
+// Freshness is stamped on every tool result to identify the source generation
+// it observed and whether it may lag the current source state.
 type Freshness struct {
 	Generation uint64 `json:"generation"`
 	Stale      bool   `json:"stale"`
 }
 
 // LanguageProvider is the seam between the daemon and a language's LSP server.
-// It is intentionally position-based, mirroring LSP one-to-one: the tsgo
-// provider (internal/lsp) is a thin passthrough, and later providers (pyright,
-// gopls, rust-analyzer) implement the same three methods.
+// It is position-based so the tsgo provider can map calls directly to LSP
+// requests.
 //
 // Symbol-name-path addressing (resolving a human-supplied symbol name to a
 // position, because offsets shift under unobserved edits) is deliberately NOT

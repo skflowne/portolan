@@ -1,7 +1,6 @@
 // Package mcp wires the portolan tools (internal/tools) onto the
 // Model Context Protocol SDK: it builds an *mcp.Server exposing the three
-// tools over stdio, and runs a project-keyed control socket used by the
-// Phase 1 staleness barrier (see control.go).
+// tools over stdio and owns the project-keyed control socket.
 package mcp
 
 import (

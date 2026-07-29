@@ -1,7 +1,5 @@
 // Command portoland is the portolan daemon: it starts a project-keyed
-// control socket (Phase 0 scaffold for the Phase 1 staleness barrier) and
-// serves the three code-graph MCP tools (find_definition, find_references,
-// get_outline) over stdio.
+// control socket and serves the code-graph MCP tools over stdio.
 package main
 
 import (
@@ -50,8 +48,6 @@ func run() error {
 		return fmt.Errorf("portoland: opening telemetry stream: %w", err)
 	}
 
-	// The real LSP provider (tsgo --lsp) — spawns the subprocess and completes
-	// the initialize handshake.
 	provider, err := lsp.New(cfg)
 	if err != nil {
 		cleanupErr := logger.Close()
