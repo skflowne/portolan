@@ -1,5 +1,5 @@
-// Package tiera is the Phase 0 Tier A gate: a retrieval-correctness harness
-// that drives the real portoland daemon over MCP against a pinned TypeScript fixture.
+// Package tiera verifies retrieval correctness by driving the real portoland
+// daemon over MCP against a pinned TypeScript fixture.
 package tiera
 
 import (
@@ -88,7 +88,7 @@ func TestTierA(t *testing.T) {
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
 	mainTS := filepath.Join(fixtureRoot(t), "src", "main.ts")
 
-	// The daemon must advertise exactly the three Phase 0 tools.
+	// The daemon must advertise all supported code-graph tools.
 	t.Run("tools_list", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -177,16 +177,13 @@ func TestTierA(t *testing.T) {
 		}
 	})
 
-	// Phase 0 exit criterion: every call is logged. After the calls above,
-	// the JSONL stream must contain one line per tool invocation.
+	// Every completed tool invocation must produce exactly one telemetry event.
 	t.Run("every_call_logged", func(t *testing.T) {
-		// Close the session first so the daemon flushes and exits.
+		// Closing the session lets the daemon flush telemetry before verification.
 		_ = sess.Close()
-		// Give the OS a moment; poll the file.
 		var lines []map[string]any
 		deadline := time.Now().Add(5 * time.Second)
-		// 4 tool calls above (2 outlines + 1 refs + 1 def); ListTools is not a
-		// tool call and emits no event. Break as soon as they've all landed.
+		// ListTools is not a tool invocation and therefore emits no event.
 		for time.Now().Before(deadline) {
 			lines = readJSONL(t, jsonl)
 			if len(lines) >= 4 {
