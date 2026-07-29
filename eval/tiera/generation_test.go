@@ -2,6 +2,7 @@ package tiera
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -17,8 +18,10 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 	d := startDaemon(t, "generation-propagation", socket)
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
 
+	pinned := loadPinnedContract(t)
+	beforeWant := expectedStructuredOutput(t, pinned, "outline_geometry")
 	var before tools.GetOutlineOutput
-	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, &before)
+	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, beforeWant, &before)
 	assertOutlineGeneration(t, before, 0)
 
 	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
@@ -40,8 +43,10 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 		t.Fatalf("sync response = %q", response)
 	}
 
+	afterWant := expectedStructuredOutput(t, pinned, "outline_geometry").(map[string]any)
+	afterWant["freshness"].(map[string]any)["generation"] = json.Number("1")
 	var after tools.GetOutlineOutput
-	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, &after)
+	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, afterWant, &after)
 	assertOutlineGeneration(t, after, 1)
 
 	stopDaemon(t, d)

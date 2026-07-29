@@ -24,6 +24,7 @@ type pinnedContract struct {
 	OutlineMain         tools.GetOutlineOutput     `json:"outline_main"`
 	OutlineInvalidFile  tools.GetOutlineOutput     `json:"outline_invalid_file"`
 	Telemetry           []expectedEvent            `json:"telemetry"`
+	raw                 map[string]any
 }
 
 type expectedEvent struct {
@@ -49,7 +50,48 @@ func loadPinnedContract(t *testing.T) pinnedContract {
 	if err := decoder.Decode(&contract); err != nil {
 		t.Fatalf("decoding pinned contract: %v", err)
 	}
+	decoder = json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&contract.raw); err != nil {
+		t.Fatalf("decoding raw pinned contract: %v", err)
+	}
+	for key, output := range contract.raw {
+		if key != "telemetry" {
+			expandFixturePaths(t, output)
+		}
+	}
 	return contract
+}
+
+func expandFixturePaths(t *testing.T, value any) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == "file" {
+				path, ok := child.(string)
+				if !ok {
+					t.Fatalf("fixture file value has type %T, want string", child)
+				}
+				value[key] = filepath.Join(fixtureRoot(t), filepath.FromSlash(path))
+				continue
+			}
+			expandFixturePaths(t, child)
+		}
+	case []any:
+		for _, child := range value {
+			expandFixturePaths(t, child)
+		}
+	}
+}
+
+func expectedStructuredOutput(t *testing.T, contract pinnedContract, key string) any {
+	t.Helper()
+	output, ok := contract.raw[key]
+	if !ok {
+		t.Fatalf("pinned contract has no output %q", key)
+	}
+	return cloneJSONValue(t, output)
 }
 
 func normalizeContractPaths(t *testing.T, contract *pinnedContract) {
@@ -218,6 +260,67 @@ func compareJSON(path string, got, want any) error {
 		return fmt.Errorf("%s = %v, want %v", path, got, want)
 	}
 	return nil
+}
+
+func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
+	contract := loadPinnedContract(t)
+	wantRaw := expectedStructuredOutput(t, contract, "outline_geometry")
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "missing truncated false", mutate: func(output map[string]any) { delete(output, "truncated") }},
+		{name: "missing freshness generation zero", mutate: func(output map[string]any) {
+			delete(output["freshness"].(map[string]any), "generation")
+		}},
+		{name: "missing freshness stale false", mutate: func(output map[string]any) {
+			delete(output["freshness"].(map[string]any), "stale")
+		}},
+		{name: "missing zero coordinate", mutate: func(output map[string]any) {
+			symbol := output["symbols"].([]any)[0].(map[string]any)
+			delete(symbol["range"].(map[string]any)["start"].(map[string]any), "character")
+		}},
+		{name: "missing zero depth", mutate: func(output map[string]any) {
+			delete(output["symbols"].([]any)[0].(map[string]any), "depth")
+		}},
+		{name: "unexpected top-level key", mutate: func(output map[string]any) { output["extra"] = true }},
+		{name: "unexpected nested key", mutate: func(output map[string]any) {
+			output["freshness"].(map[string]any)["extra"] = true
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := cloneJSONValue(t, wantRaw).(map[string]any)
+			tt.mutate(raw)
+			var got tools.GetOutlineOutput
+			if err := decodeStructuredOutput("outline_geometry", raw, wantRaw, &got); err == nil {
+				t.Fatal("raw mutation passed the pinned contract")
+			}
+		})
+	}
+}
+
+func decodeStructuredOutput(path string, gotRaw, wantRaw, out any) error {
+	if err := contractMismatch(path, gotRaw, wantRaw); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(gotRaw)
+	if err != nil {
+		return fmt.Errorf("%s: encode typed output: %w", path, err)
+	}
+	if err := json.Unmarshal(encoded, out); err != nil {
+		return fmt.Errorf("%s: decode typed output: %w", path, err)
+	}
+	return nil
+}
+
+func cloneJSONValue(t *testing.T, source any) any {
+	t.Helper()
+	value, err := jsonValue(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestPinnedContractRejectsMutations(t *testing.T) {
