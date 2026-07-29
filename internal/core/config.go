@@ -9,11 +9,10 @@ type Config struct {
 	// The control socket path is keyed off this so one daemon serves one project.
 	ProjectRoot string
 
-	// SessionID tags every telemetry Event; supplied by the harness (Claude Code
-	// hook / Pi) so token accounting can be joined to graph activity.
+	// SessionID identifies the caller session associated with telemetry events.
 	SessionID string
 
-	// GraphMode is "graph" or "no-graph"; the eval axis. Stamped on telemetry.
+	// GraphMode identifies the configured graph mode associated with telemetry events.
 	GraphMode string
 
 	// TsgoPath is the tsgo executable (default "tsgo", resolved on PATH).
