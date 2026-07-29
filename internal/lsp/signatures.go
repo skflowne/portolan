@@ -73,9 +73,9 @@ func planSignature(symbol core.Symbol, source string) (signaturePlan, error) {
 
 	var tokens []string
 	switch symbol.Kind {
-	case "function":
+	case core.SymbolKindFunction:
 		tokens = []string{"function", "=>"}
-	case "class":
+	case core.SymbolKindClass:
 		tokens = []string{"class"}
 	default:
 		return plan, nil
