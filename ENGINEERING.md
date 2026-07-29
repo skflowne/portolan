@@ -33,7 +33,7 @@ Allowed production dependencies and stable ownership:
 | Package | Owns | May import |
 | --- | --- | --- |
 | `internal/core` | `LanguageProvider`, shared result/telemetry contracts, `Config` | standard library |
-| `internal/pathnorm` | WSL/Windows path normalization | standard library |
+| `internal/pathnorm` | Canonical host-path identity and file-URI conversion | standard library |
 | `internal/lsp` | LSP JSON-RPC, transport, provider adaptation | `internal/core`, `internal/pathnorm` |
 | `internal/telemetry` | JSONL, OTel, composed sinks | `internal/core` |
 | `internal/tools` | Tool behavior and shared call policy | `internal/core`, `internal/pathnorm` |
