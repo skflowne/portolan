@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,6 +14,139 @@ import (
 	"testing"
 	"time"
 )
+
+func TestCloseTimesOutWaitingForWriteGate(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.transport.shutdownTimeout = 10 * time.Millisecond
+	var kills atomic.Int32
+	p.transport.killProcess = func() error {
+		kills.Add(1)
+		return nil
+	}
+	if err := p.transport.lockWrite(context.Background()); err != nil {
+		t.Fatalf("hold write gate: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- p.Close() }()
+	if err := waitError(t, result, "Close waiting for gate"); err != nil {
+		p.transport.unlockWrite()
+		t.Fatalf("Close: %v", err)
+	}
+	p.transport.unlockWrite()
+	if kills.Load() != 1 || writer.closeCalls() != 1 {
+		t.Fatalf("kill calls = %d stdin close calls = %d, want 1 each", kills.Load(), writer.closeCalls())
+	}
+}
+
+func TestCloseTimesOutDuringShutdownWrite(t *testing.T) {
+	writer := newCloseBlockingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	p.transport.shutdownTimeout = 10 * time.Millisecond
+	result := make(chan error, 1)
+	go func() { result <- p.Close() }()
+	waitSignal(t, writer.started, "shutdown write")
+	if err := waitError(t, result, "Close during shutdown write"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	waitSignal(t, writer.returned, "shutdown writer exit")
+	if writer.closeCalls() != 1 {
+		t.Fatalf("stdin close calls = %d, want 1", writer.closeCalls())
+	}
+}
+
+func TestWaitForProcessKillsAndReapsWithinBounds(t *testing.T) {
+	p := newUnitProvider(&recordingWriteCloser{}, nil)
+	releaseWait := make(chan struct{})
+	waitReturned := make(chan struct{})
+	p.transport.waitProcess = func() error {
+		<-releaseWait
+		close(waitReturned)
+		return nil
+	}
+	p.transport.killProcess = func() error {
+		close(releaseWait)
+		return nil
+	}
+	p.transport.killWait = time.Second
+	finished := make(chan struct{})
+	go func() {
+		p.transport.waitForProcess(10 * time.Millisecond)
+		close(finished)
+	}()
+	waitSignal(t, finished, "bounded process wait")
+	waitSignal(t, waitReturned, "process reap")
+}
+
+func TestCloseReleasesPendingAndSerializesShutdown(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+
+	callErr := make(chan error, 1)
+	go func() {
+		_, err := p.transport.call(context.Background(), "ordinary", nil)
+		callErr <- err
+	}()
+	writer.waitForMethod(t, "ordinary")
+
+	const closers = 5
+	closeErrs := make(chan error, closers)
+	for range closers {
+		go func() { closeErrs <- p.Close() }()
+	}
+	writer.waitForShutdown(t)
+
+	select {
+	case err := <-callErr:
+		if !errors.Is(err, errProviderClosed) {
+			t.Fatalf("ordinary call error = %v, want provider closed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not promptly release ordinary call")
+	}
+
+	notifyErr := make(chan error, 1)
+	go func() { notifyErr <- p.transport.notify(context.Background(), "queued", nil) }()
+	close(writer.releaseShutdown)
+	if !p.transport.deliverResponse("2", &jsonrpcMessage{Result: json.RawMessage(`null`)}) {
+		t.Fatal("shutdown response did not complete internal request")
+	}
+
+	if err := waitError(t, notifyErr, "queued notification"); !errors.Is(err, errProviderClosed) {
+		t.Fatalf("queued notification error = %v, want provider closed", err)
+	}
+	for range closers {
+		if err := waitError(t, closeErrs, "Close"); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	methods := writer.methods()
+	want := []string{"ordinary", "shutdown", "exit"}
+	if fmt.Sprint(methods) != fmt.Sprint(want) {
+		t.Fatalf("written methods = %v, want %v", methods, want)
+	}
+	if writer.closeCalls() != 1 {
+		t.Fatalf("stdin Close calls = %d, want 1", writer.closeCalls())
+	}
+}
+
+func TestCloseAfterReaderFailureSkipsHandshake(t *testing.T) {
+	writer := newRecordingWriteCloser()
+	p := newUnitProvider(writer, nil)
+	cause := errors.New("reader failed")
+	p.transport.readerFailed(cause)
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if methods := writer.methods(); len(methods) != 0 {
+		t.Fatalf("written methods after reader failure = %v, want none", methods)
+	}
+	if err := p.transport.admitWrite(writeExternal); !errors.Is(err, cause) {
+		t.Fatalf("preserved connection error = %v, want %v", err, cause)
+	}
+}
 
 func transportStateAndCause(t *transport) (transportState, error) {
 	t.mu.Lock()
