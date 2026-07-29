@@ -31,6 +31,7 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 			},
 		},
 		{file: "default-arrow.ts", want: map[string]string{"default@0": "function (Anonymous function)(): number"}},
+		{file: "default-function.ts", want: map[string]string{"default@0": "function default(): number"}},
 		{file: "default-class.ts", want: map[string]string{"default@0": "class default", "method@1": "(method) default.method(): void"}},
 	}
 
@@ -207,13 +208,61 @@ func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
 }
 
 func TestRequestSignaturesHonorsCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := requestSignatures(ctx, "file:///repo/a.ts", []signaturePlan{{}}, func(context.Context, string, any) (json.RawMessage, error) {
-		t.Fatal("request called after cancellation")
-		return nil, nil
+	t.Run("before dispatch", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := requestSignatures(ctx, "file:///repo/a.ts", []signaturePlan{{}}, func(context.Context, string, any) (json.RawMessage, error) {
+			t.Fatal("request called after cancellation")
+			return nil, nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
 	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context canceled", err)
-	}
+
+	t.Run("in flight", func(t *testing.T) {
+		plans := make([]signaturePlan, maxConcurrentSignatureRequests)
+		ctx, cancel := context.WithCancel(context.Background())
+		var mu sync.Mutex
+		active := 0
+		allStarted := make(chan struct{})
+		var startedOnce sync.Once
+		request := func(ctx context.Context, _ string, _ any) (json.RawMessage, error) {
+			mu.Lock()
+			active++
+			if active == len(plans) {
+				startedOnce.Do(func() { close(allStarted) })
+			}
+			mu.Unlock()
+			<-ctx.Done()
+			mu.Lock()
+			active--
+			mu.Unlock()
+			return nil, ctx.Err()
+		}
+		result := make(chan error, 1)
+		go func() {
+			_, err := requestSignatures(ctx, "file:///repo/a.ts", plans, request)
+			result <- err
+		}()
+		select {
+		case <-allStarted:
+		case <-time.After(time.Second):
+			t.Fatal("signature requests did not enter the in-flight state")
+		}
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context canceled", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("in-flight signature requests did not drain after cancellation")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if active != 0 {
+			t.Fatalf("active requests = %d, want 0", active)
+		}
+	})
 }

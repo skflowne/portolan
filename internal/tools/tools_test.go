@@ -920,6 +920,14 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 				return out.Error, err
 			},
 		},
+		{
+			name:  "outline_signatures",
+			stage: "signatures",
+			call: func(ctx context.Context, tl *Tools) (string, error) {
+				out, err := tl.GetOutline(ctx, GetOutlineInput{File: "/repo/main.go"})
+				return out.Error, err
+			},
+		},
 	}
 
 	for _, tc := range cases {

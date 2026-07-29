@@ -175,6 +175,55 @@ func TestNewServer_FindDefinitionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNewServer_GetOutlineOmitsUnavailableSignatureWithoutDroppingSymbol(t *testing.T) {
+	srv := NewServer(testTools(t))
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		_, _ = srv.Connect(ctx, serverTransport, nil)
+	}()
+	client := sdk.NewClient(&sdk.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer cs.Close()
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "get_outline", Arguments: map[string]any{"file": "/repo/main.go"}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error result: %+v", res)
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(raw, &output); err != nil {
+		t.Fatalf("decode structured content: %v", err)
+	}
+	if output["found"] != true {
+		t.Fatalf("found = %v, want true", output["found"])
+	}
+	symbols := output["symbols"].([]any)
+	if len(symbols) != 1 {
+		t.Fatalf("symbols = %+v, want one symbol", symbols)
+	}
+	symbol := symbols[0].(map[string]any)
+	if symbol["name"] != "DoThing" {
+		t.Fatalf("symbol = %+v, want DoThing", symbol)
+	}
+	if _, exists := symbol["signature"]; exists {
+		t.Fatalf("unavailable signature was serialized: %+v", symbol)
+	}
+	if _, exists := symbol["detail"]; exists {
+		t.Fatalf("unavailable detail was serialized: %+v", symbol)
+	}
+}
+
 func TestControlSocket_SyncBumpsGenerationAndReplies(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "portoland-test.sock")
