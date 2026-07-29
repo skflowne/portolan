@@ -94,6 +94,28 @@ planning uses the exact text retained from `didOpen`, so it cannot mix LSP range
 snapshot before Phase 1 adds edit synchronization. If none of those sources yields an authoritative
 summary, the optional signature is omitted rather than reconstructed from a body.
 
+### Normalized navigation contracts
+
+`internal/core` owns the provider-independent atoms consumed by the current navigation tools:
+`Position` uses zero-based lines and UTF-16 code-unit character offsets; `Range` is half-open;
+`Location` uses an absolute canonical host path; `SymbolAtom` owns the normalized symbol fields and
+kind vocabulary; and `Symbol` adds the canonical child hierarchy. References and definitions use
+`Location` directly rather than a universal symbol union.
+
+| Boundary | Producer / adapter | Consumers | Migration and invariant |
+| --- | --- | --- | --- |
+| LSP results | `internal/lsp` converts wire positions, ranges, file URIs, numeric kinds, and nested `DocumentSymbol` JSON | `core.LanguageProvider`; all three tools | Numeric kinds map to core-owned constants with `unknown` fallback; provider JSON and URIs do not cross the adapter. |
+| Definition/reference results | `LanguageProvider.Definition` and `LanguageProvider.References` produce `[]core.Location` | `find_definition`, `find_references`, MCP's existing typed tool boundary, Tier A | No field-bag migration was needed; both tools already used the canonical location. |
+| Symbol hierarchy | `LanguageProvider.DocumentSymbols` produces `[]core.Symbol`; signature enrichment remains provider-authoritative | name resolution for definition/references, outline shaping, signature planning | `SymbolAtom` centralizes fields formerly repeated by `tools.OutlineSymbol`; `Symbol.Children` remains the hierarchy owner. |
+| Outline projection | `internal/tools` walks `Symbol.Children` depth-first and projects `SymbolAtom` plus derived `Depth` after applying `Config.Cap()` | `get_outline`, MCP's existing typed tool boundary, Tier A | The projection is flat, does not mutate or serialize `Children`, and preserves exact capped symbols for signature planning. |
+| Result status | `GenerationCounter.Current()` owns freshness; `Config.Cap()` owns the effective bound | tool output envelopes and telemetry | `Freshness`, `Truncated`, and derived `Depth` are not navigation atoms. |
+
+The current migration is complete: the duplicate outline symbol field bag and the LSP-owned string
+kind vocabulary are superseded. `core.StubProvider` remains the test producer; MCP registration and
+Tier A remain consumers of the typed tool outputs without custom rendering or serialization.
+Future call edges, diagnostics, edits, and reference-specific metadata require types matching their
+own semantics rather than additions to `SymbolAtom`.
+
 ---
 
 ## 2. A tool call, end to end

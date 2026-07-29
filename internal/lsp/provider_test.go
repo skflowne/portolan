@@ -88,9 +88,6 @@ func TestDocumentSymbols(t *testing.T) {
 	}
 }
 
-// TestDefinition asserts that resolving the use-site of `greet` in b.ts
-// (inside the call console.log(greet("World"))) lands on its declaration in
-// a.ts, line 0.
 func TestDocumentSymbolsUseUTF16CharacterOffsets(t *testing.T) {
 	p := newTestProvider(t)
 	file := absTestdata(t, "unicode-position.ts")
@@ -110,6 +107,9 @@ func TestDocumentSymbolsUseUTF16CharacterOffsets(t *testing.T) {
 	t.Fatalf("target symbol not found in %+v", symbols)
 }
 
+// TestDefinition asserts that resolving the use-site of `greet` in b.ts
+// (inside the call console.log(greet("World"))) lands on its declaration in
+// a.ts, line 0.
 func TestDefinition(t *testing.T) {
 	p := newTestProvider(t)
 	aFile := absTestdata(t, "a.ts")
