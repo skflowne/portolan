@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -11,12 +13,10 @@ import (
 )
 
 func TestTreeTransformsHonorContext(t *testing.T) {
-	symbols := []core.Symbol{{
-		Name: "Container",
-		Children: []core.Symbol{
-			{Name: "First"},
-			{Name: "Target"},
-		},
+	symbols := []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Container"}, Children: []core.Symbol{
+		{SymbolAtom: core.SymbolAtom{Name: "First"}},
+		{SymbolAtom: core.SymbolAtom{Name: "Target"}},
+	},
 	}}
 
 	t.Run("resolve", func(t *testing.T) {
@@ -32,6 +32,62 @@ func TestTreeTransformsHonorContext(t *testing.T) {
 			t.Fatalf("flattenSymbols = (%+v, %v), want no partial output and context canceled", flat, err)
 		}
 	})
+}
+
+func TestOutlineProjectionUsesCanonicalSymbol(t *testing.T) {
+	typeOfProjection := reflect.TypeOf(OutlineSymbol{})
+	if typeOfProjection.NumField() != 2 {
+		t.Fatalf("OutlineSymbol fields = %d, want embedded core.SymbolAtom plus Depth", typeOfProjection.NumField())
+	}
+	symbolField := typeOfProjection.Field(0)
+	if !symbolField.Anonymous || symbolField.Type != reflect.TypeOf(core.SymbolAtom{}) {
+		t.Fatalf("OutlineSymbol first field = %+v, want anonymous core.SymbolAtom", symbolField)
+	}
+	if depthField := typeOfProjection.Field(1); depthField.Name != "Depth" || depthField.Type.Kind() != reflect.Int {
+		t.Fatalf("OutlineSymbol second field = %+v, want int Depth", depthField)
+	}
+
+	for _, forbidden := range []string{"Depth", "Freshness", "Truncated"} {
+		if _, exists := reflect.TypeOf(core.Symbol{}).FieldByName(forbidden); exists {
+			t.Errorf("core.Symbol contains projection/envelope field %s", forbidden)
+		}
+	}
+}
+
+func TestOutlineProjectionPreservesHierarchyAndDerivesDepth(t *testing.T) {
+	tree := func() []core.Symbol {
+		return []core.Symbol{
+			{SymbolAtom: core.SymbolAtom{Name: "Parent"}, Children: []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Child"}, Children: []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Grandchild"}}}}}},
+			{SymbolAtom: core.SymbolAtom{Name: "Sibling"}},
+		}
+	}
+	symbols := tree()
+	original := tree()
+
+	flat, err := flattenSymbols(context.Background(), symbols, 10)
+	if err != nil {
+		t.Fatalf("flattenSymbols: %v", err)
+	}
+	wantNames := []string{"Parent", "Child", "Grandchild", "Sibling"}
+	wantDepths := []int{0, 1, 2, 0}
+	if len(flat.outline) != len(wantNames) {
+		t.Fatalf("outline length = %d, want %d", len(flat.outline), len(wantNames))
+	}
+	for i := range flat.outline {
+		if flat.outline[i].Name != wantNames[i] || flat.outline[i].Depth != wantDepths[i] {
+			t.Errorf("outline[%d] = (%q, depth %d), want (%q, depth %d)", i, flat.outline[i].Name, flat.outline[i].Depth, wantNames[i], wantDepths[i])
+		}
+		data, err := json.Marshal(flat.outline[i])
+		if err != nil {
+			t.Fatalf("marshal outline[%d]: %v", i, err)
+		}
+		if bytes.Contains(data, []byte(`"children"`)) {
+			t.Errorf("outline[%d] retained nested hierarchy: %s", i, data)
+		}
+	}
+	if !reflect.DeepEqual(symbols, original) {
+		t.Fatalf("flattenSymbols mutated canonical hierarchy: got %+v, want %+v", symbols, original)
+	}
 }
 
 func TestOutlineTraversalStopsAtResultCap(t *testing.T) {

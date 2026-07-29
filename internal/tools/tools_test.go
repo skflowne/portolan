@@ -348,12 +348,11 @@ func TestFindDefinition_ResolvesByNameAndPosition(t *testing.T) {
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.Symbol{
 			file: {
-				{
-					Name:     "DoThing",
+				{SymbolAtom: core.SymbolAtom{Name: "DoThing",
 					Kind:     "function",
 					File:     file,
 					Range:    rng(10, 0, 20, 1),
-					SelRange: rng(10, 5, 10, 12),
+					SelRange: rng(10, 5, 10, 12)},
 				},
 			},
 		},
@@ -401,8 +400,8 @@ func TestFindDefinition_DisambiguatesByLine(t *testing.T) {
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.Symbol{
 			file: {
-				{Name: "Foo", Kind: "function", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 5, 1, 8)},
-				{Name: "Foo", Kind: "function", File: file, Range: rng(5, 0, 6, 0), SelRange: rng(5, 5, 5, 8)},
+				{SymbolAtom: core.SymbolAtom{Name: "Foo", Kind: "function", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 5, 1, 8)}},
+				{SymbolAtom: core.SymbolAtom{Name: "Foo", Kind: "function", File: file, Range: rng(5, 0, 6, 0), SelRange: rng(5, 5, 5, 8)}},
 			},
 		},
 	}
@@ -429,7 +428,7 @@ func TestFindDefinition_DisambiguatesByLine(t *testing.T) {
 func TestFindDefinition_SymbolNotFound(t *testing.T) {
 	file := "/repo/main.go"
 	provider := &core.StubProvider{
-		Symbols: map[string][]core.Symbol{file: {{Name: "Bar", SelRange: rng(0, 0, 0, 3)}}},
+		Symbols: map[string][]core.Symbol{file: {{SymbolAtom: core.SymbolAtom{Name: "Bar", SelRange: rng(0, 0, 0, 3)}}}},
 	}
 	logger := &capturingLogger{}
 	tl := newTestTools(provider, logger, core.Config{})
@@ -484,7 +483,7 @@ func TestFindDefinition_ProviderErrorIsSoft(t *testing.T) {
 
 func TestFindReferences_CapsAndTruncates(t *testing.T) {
 	file := "/repo/main.go"
-	symbols := []core.Symbol{{Name: "Used", SelRange: rng(0, 0, 0, 4)}}
+	symbols := []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Used", SelRange: rng(0, 0, 0, 4)}}}
 	var refs []core.Location
 	for i := 0; i < 250; i++ {
 		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
@@ -519,7 +518,7 @@ func TestFindReferences_CapsAndTruncates(t *testing.T) {
 
 func TestFindReferences_DefaultCap(t *testing.T) {
 	file := "/repo/main.go"
-	symbols := []core.Symbol{{Name: "Used", SelRange: rng(0, 0, 0, 4)}}
+	symbols := []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Used", SelRange: rng(0, 0, 0, 4)}}}
 	var refs []core.Location
 	for i := 0; i < core.DefaultMaxResults+10; i++ {
 		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
@@ -548,13 +547,11 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.Symbol{
 			file: {
-				{
-					Name: "Outer", Kind: "class", File: file,
+				{SymbolAtom: core.SymbolAtom{Name: "Outer", Kind: "class", File: file,
 					Range: rng(0, 0, 10, 0), SelRange: rng(0, 6, 0, 11),
-					Signature: "class Outer", Detail: "document symbol detail",
-					Children: []core.Symbol{
-						{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "(method) Outer.Inner(): void"},
-					},
+					Signature: "class Outer", Detail: "document symbol detail"}, Children: []core.Symbol{
+					{SymbolAtom: core.SymbolAtom{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "(method) Outer.Inner(): void"}},
+				},
 				},
 			},
 		},
@@ -598,7 +595,7 @@ func TestGetOutline_CapsFlattenedList(t *testing.T) {
 	file := "/repo/big.go"
 	var symbols []core.Symbol
 	for i := 0; i < 120; i++ {
-		symbols = append(symbols, core.Symbol{Name: "S", Kind: "function", File: file, SelRange: rng(i, 0, i, 1)})
+		symbols = append(symbols, core.Symbol{SymbolAtom: core.SymbolAtom{Name: "S", Kind: "function", File: file, SelRange: rng(i, 0, i, 1)}})
 	}
 	provider := &core.StubProvider{Symbols: map[string][]core.Symbol{file: symbols}}
 	logger := &capturingLogger{}
@@ -619,14 +616,12 @@ func TestGetOutline_CapsFlattenedList(t *testing.T) {
 func TestGetOutlineRequestsSignaturesOnlyForCappedSymbols(t *testing.T) {
 	file := "/repo/big.go"
 	symbols := []core.Symbol{
-		{
-			Name: "Container", Kind: "class", File: file, SelRange: rng(0, 0, 0, 9),
-			Children: []core.Symbol{
-				{Name: "First", Kind: "method", File: file, SelRange: rng(1, 0, 1, 5)},
-				{Name: "Second", Kind: "method", File: file, SelRange: rng(2, 0, 2, 6)},
-			},
+		{SymbolAtom: core.SymbolAtom{Name: "Container", Kind: "class", File: file, SelRange: rng(0, 0, 0, 9)}, Children: []core.Symbol{
+			{SymbolAtom: core.SymbolAtom{Name: "First", Kind: "method", File: file, SelRange: rng(1, 0, 1, 5)}},
+			{SymbolAtom: core.SymbolAtom{Name: "Second", Kind: "method", File: file, SelRange: rng(2, 0, 2, 6)}},
 		},
-		{Name: "Trailing", Kind: "function", File: file, SelRange: rng(3, 0, 3, 8)},
+		},
+		{SymbolAtom: core.SymbolAtom{Name: "Trailing", Kind: "function", File: file, SelRange: rng(3, 0, 3, 8)}},
 	}
 	provider := &signatureResultProvider{StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: symbols}}}
 	tl := newTestTools(provider, &capturingLogger{}, core.Config{MaxResults: 2})
@@ -647,7 +642,7 @@ func TestGetOutlineRequestsSignaturesOnlyForCappedSymbols(t *testing.T) {
 func TestGetOutlineSignatureFailureIsSoftAndReturnsNoPartialOutline(t *testing.T) {
 	file := "/repo/main.go"
 	provider := &signatureResultProvider{
-		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{Name: "Target", File: file}}}},
+		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}}},
 		err:          errBoom,
 	}
 	logger := &capturingLogger{}
@@ -667,7 +662,7 @@ func TestGetOutlineSignatureFailureIsSoftAndReturnsNoPartialOutline(t *testing.T
 func TestGetOutlineRejectsMisalignedSignatureResult(t *testing.T) {
 	file := "/repo/main.go"
 	provider := &signatureResultProvider{
-		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{Name: "Target", File: file}}}},
+		StubProvider: &core.StubProvider{Symbols: map[string][]core.Symbol{file: {{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}}},
 		signatures:   []string{},
 	}
 	out, err := newTestTools(provider, &capturingLogger{}, core.Config{}).GetOutline(context.Background(), GetOutlineInput{File: file})
@@ -762,15 +757,15 @@ func (p *telemetryProvider) symbols(file string) []core.Symbol {
 			return nil
 		}
 		return []core.Symbol{
-			{Name: "First", File: file},
-			{Name: "Second", File: file},
-			{Name: "Third", File: file},
+			{SymbolAtom: core.SymbolAtom{Name: "First", File: file}},
+			{SymbolAtom: core.SymbolAtom{Name: "Second", File: file}},
+			{SymbolAtom: core.SymbolAtom{Name: "Third", File: file}},
 		}
 	}
 	if p.outcome == "unresolved" {
-		return []core.Symbol{{Name: "Other", File: file}}
+		return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Other", File: file}}}
 	}
-	return []core.Symbol{{Name: "Target", File: file}}
+	return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}
 }
 
 func (p *telemetryProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
@@ -844,7 +839,7 @@ func (p *fileRecordingProvider) DocumentSymbols(_ context.Context, file string) 
 	if !p.symbols {
 		return nil, nil
 	}
-	return []core.Symbol{{Name: "Target", File: file}}, nil
+	return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}, nil
 }
 
 func (p *fileRecordingProvider) SymbolSignatures(_ context.Context, file string, symbols []core.Symbol) ([]string, error) {

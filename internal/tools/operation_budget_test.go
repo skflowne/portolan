@@ -368,7 +368,7 @@ func (p *contextRecordingProvider) References(ctx context.Context, file string, 
 
 func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
 	p.record(ctx)
-	return []core.Symbol{{Name: "Target", File: file}}, nil
+	return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}, nil
 }
 
 func (p *contextRecordingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {
@@ -411,13 +411,10 @@ func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) (
 	if p.cancelStage == "symbols" {
 		p.cancel()
 	}
-	return []core.Symbol{{
-		Name: "Container",
-		File: p.file,
-		Children: []core.Symbol{{
-			Name: "Target",
-			File: p.file,
-		}},
+	return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Container",
+		File: p.file}, Children: []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Target",
+		File: p.file},
+	}},
 	}}, nil
 }
 
@@ -481,7 +478,7 @@ func (p *blockingProvider) DocumentSymbols(ctx context.Context, file string) ([]
 	if err := p.block(ctx, "symbols"); err != nil {
 		return nil, err
 	}
-	return []core.Symbol{{Name: "Target", File: file}}, nil
+	return []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "Target", File: file}}}, nil
 }
 
 func (p *blockingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {

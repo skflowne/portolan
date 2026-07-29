@@ -137,12 +137,14 @@ func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.
 		}
 	}
 	return core.Symbol{
-		Name:     s.Name,
-		Kind:     core.SymbolKind(symbolKindName(s.Kind)),
-		File:     file,
-		Range:    s.Range.toCoreRange(),
-		SelRange: s.SelectionRange.toCoreRange(),
-		Detail:   s.Detail,
+		SymbolAtom: core.SymbolAtom{
+			Name:     s.Name,
+			Kind:     symbolKindName(s.Kind),
+			File:     file,
+			Range:    s.Range.toCoreRange(),
+			SelRange: s.SelectionRange.toCoreRange(),
+			Detail:   s.Detail,
+		},
 		Children: children,
 	}, nil
 }

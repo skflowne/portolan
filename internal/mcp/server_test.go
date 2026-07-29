@@ -26,12 +26,12 @@ func testTools(t *testing.T) *tools.Tools {
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.Symbol{
 			file: {
-				{Name: "DoThing", Kind: "function", File: file,
+				{SymbolAtom: core.SymbolAtom{Name: "DoThing", Kind: "function", File: file,
 					Range: core.Range{Start: core.Position{Line: 1}, End: core.Position{Line: 2}},
 					SelRange: core.Range{
 						Start: core.Position{Line: 1, Character: 5},
 						End:   core.Position{Line: 1, Character: 12},
-					},
+					}},
 				},
 			},
 		},
@@ -111,6 +111,9 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	symbols := properties["symbols"].(map[string]any)
 	items := symbols["items"].(map[string]any)
 	symbolProperties := items["properties"].(map[string]any)
+	if _, exists := symbolProperties["children"]; exists {
+		t.Fatalf("flat outline schema exposes canonical hierarchy: %+v", symbolProperties)
+	}
 	for field, wantDescription := range map[string]string{
 		"signature": "provider-authoritative",
 		"detail":    "independent of signature",

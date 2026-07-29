@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+
+	"github.com/skflowne/portolan/internal/core"
 )
 
 func TestWorkspaceIdentityUsesCanonicalPathCodec(t *testing.T) {
@@ -98,18 +100,19 @@ func TestPrepareOpenRejectsInvalidIdentityBeforeSideEffects(t *testing.T) {
 func TestDecodeLocationsUsesCanonicalURIIdentity(t *testing.T) {
 	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
 	rangeJSON := `{"start":{"line":1,"character":2},"end":{"line":3,"character":4}}`
+	multiline := core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 3, Character: 4}}
+	selection := core.Range{Start: core.Position{Line: 7, Character: 1}, End: core.Position{Line: 7, Character: 2}}
 	tests := []struct {
 		name string
 		raw  string
-		file string
-		line int
+		want core.Location
 	}{
-		{"space and Unicode", `{"uri":"file://localhost/tmp/space%20%E2%98%83.ts","range":` + rangeJSON + `}`, "/tmp/space ☃.ts", 1},
-		{"drive path", `{"uri":"file:///C:/Users/me/a.ts","range":` + rangeJSON + `}`, "/mnt/c/Users/me/a.ts", 1},
-		{"WSL authority", `{"uri":"file://wsl.localhost/Ubuntu/home/me/a.ts","range":` + rangeJSON + `}`, "/home/me/a.ts", 1},
-		{"legacy WSL authority", `{"uri":"file://wsl$/Ubuntu/home/me/a.ts","range":` + rangeJSON + `}`, "/home/me/a.ts", 1},
-		{"location link selection", `{"targetUri":"file:///tmp/a.ts","targetRange":` + rangeJSON + `,"targetSelectionRange":{"start":{"line":7,"character":1},"end":{"line":7,"character":2}}}`, "/tmp/a.ts", 7},
-		{"location link target fallback", `{"targetUri":"file:///tmp/a.ts","targetRange":` + rangeJSON + `}`, "/tmp/a.ts", 1},
+		{"space and Unicode", `{"uri":"file://localhost/tmp/space%20%E2%98%83.ts","range":` + rangeJSON + `}`, core.Location{File: "/tmp/space ☃.ts", Range: multiline}},
+		{"drive path", `{"uri":"file:///C:/Users/me/a.ts","range":` + rangeJSON + `}`, core.Location{File: "/mnt/c/Users/me/a.ts", Range: multiline}},
+		{"WSL authority", `{"uri":"file://wsl.localhost/Ubuntu/home/me/a.ts","range":` + rangeJSON + `}`, core.Location{File: "/home/me/a.ts", Range: multiline}},
+		{"legacy WSL authority", `{"uri":"file://wsl$/Ubuntu/home/me/a.ts","range":` + rangeJSON + `}`, core.Location{File: "/home/me/a.ts", Range: multiline}},
+		{"location link selection", `{"targetUri":"file:///tmp/a.ts","targetRange":` + rangeJSON + `,"targetSelectionRange":{"start":{"line":7,"character":1},"end":{"line":7,"character":2}}}`, core.Location{File: "/tmp/a.ts", Range: selection}},
+		{"location link target fallback", `{"targetUri":"file:///tmp/a.ts","targetRange":` + rangeJSON + `}`, core.Location{File: "/tmp/a.ts", Range: multiline}},
 	}
 
 	for _, tc := range tests {
@@ -118,8 +121,8 @@ func TestDecodeLocationsUsesCanonicalURIIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decodeLocations: %v", err)
 			}
-			if len(locations) != 1 || locations[0].File != tc.file || locations[0].Range.Start.Line != tc.line {
-				t.Fatalf("locations = %+v, want file %q line %d", locations, tc.file, tc.line)
+			if len(locations) != 1 || locations[0] != tc.want {
+				t.Fatalf("locations = %+v, want %+v", locations, []core.Location{tc.want})
 			}
 		})
 	}

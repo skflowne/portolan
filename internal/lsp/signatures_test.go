@@ -131,16 +131,16 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 	}{
 		{
 			name: "bodyless call signature",
-			symbol: core.Symbol{Name: "()", Kind: "method", Range: core.Range{
+			symbol: core.Symbol{SymbolAtom: core.SymbolAtom{Name: "()", Kind: "method", Range: core.Range{
 				Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 26},
-			}, SelRange: core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 2}}},
+			}, SelRange: core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 2}}}},
 			want: signaturePlan{position: core.Position{Line: 1, Character: 2}, direct: "(value: string): number"},
 		},
 		{
 			name: "outer arrow after nested default",
-			symbol: core.Symbol{Name: "callback() callback", Kind: "function", Range: core.Range{
+			symbol: core.Symbol{SymbolAtom: core.SymbolAtom{Name: "callback() callback", Kind: "function", Range: core.Range{
 				Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 38},
-			}, SelRange: core.Range{Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 15}}},
+			}, SelRange: core.Range{Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 15}}}},
 			want: signaturePlan{position: core.Position{Line: 3, Character: 30}},
 		},
 	}

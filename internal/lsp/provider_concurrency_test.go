@@ -130,8 +130,7 @@ func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 	}
 	text = "const changed = 1;\n"
 
-	symbols := []core.Symbol{{
-		Name: "()",
+	symbols := []core.Symbol{{SymbolAtom: core.SymbolAtom{Name: "()",
 		Kind: "method",
 		Range: core.Range{
 			Start: core.Position{Line: 1, Character: 2},
@@ -140,7 +139,7 @@ func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 		SelRange: core.Range{
 			Start: core.Position{Line: 1, Character: 2},
 			End:   core.Position{Line: 1, Character: 2},
-		},
+		}},
 	}}
 	got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", symbols)
 	if err != nil {

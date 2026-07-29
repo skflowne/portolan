@@ -91,6 +91,25 @@ func TestDocumentSymbols(t *testing.T) {
 // TestDefinition asserts that resolving the use-site of `greet` in b.ts
 // (inside the call console.log(greet("World"))) lands on its declaration in
 // a.ts, line 0.
+func TestDocumentSymbolsUseUTF16CharacterOffsets(t *testing.T) {
+	p := newTestProvider(t)
+	file := absTestdata(t, "unicode-position.ts")
+
+	symbols, err := p.DocumentSymbols(testCtx(t), file)
+	if err != nil {
+		t.Fatalf("DocumentSymbols: %v", err)
+	}
+	for _, symbol := range symbols {
+		if symbol.Name == "target" {
+			if symbol.SelRange.Start != (core.Position{Line: 0, Character: 20}) {
+				t.Fatalf("target selection start = %+v, want UTF-16 position {Line:0 Character:20}", symbol.SelRange.Start)
+			}
+			return
+		}
+	}
+	t.Fatalf("target symbol not found in %+v", symbols)
+}
+
 func TestDefinition(t *testing.T) {
 	p := newTestProvider(t)
 	aFile := absTestdata(t, "a.ts")

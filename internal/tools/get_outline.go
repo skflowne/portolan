@@ -12,20 +12,12 @@ type GetOutlineInput struct {
 	File string `json:"file" jsonschema:"absolute path of the source file to outline"`
 }
 
-// OutlineSymbol is one flattened entry in a get_outline result. It carries
-// the same fields as core.Symbol except Children: the tree is flattened
-// depth-first (parent immediately followed by its children) and Depth
-// records nesting level (0 = top-level) so callers can reconstruct
-// indentation without an unbounded, cap-defeating nested shape.
+// OutlineSymbol projects a canonical SymbolAtom into the bounded flat outline.
+// Depth is derived from the canonical Symbol hierarchy and is not part of
+// symbol identity.
 type OutlineSymbol struct {
-	Name      string          `json:"name"`
-	Kind      core.SymbolKind `json:"kind"`
-	File      string          `json:"file"`
-	Range     core.Range      `json:"range"`
-	SelRange  core.Range      `json:"selRange"`
-	Signature string          `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
-	Detail    string          `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
-	Depth     int             `json:"depth"`
+	core.SymbolAtom
+	Depth int `json:"depth"`
 }
 
 // GetOutlineOutput is the output schema for get_outline.
@@ -132,16 +124,7 @@ func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) (flatte
 				return true, nil
 			}
 			s := syms[i]
-			flat.outline = append(flat.outline, OutlineSymbol{
-				Name:      s.Name,
-				Kind:      s.Kind,
-				File:      s.File,
-				Range:     s.Range,
-				SelRange:  s.SelRange,
-				Signature: s.Signature,
-				Detail:    s.Detail,
-				Depth:     depth,
-			})
+			flat.outline = append(flat.outline, OutlineSymbol{SymbolAtom: s.SymbolAtom, Depth: depth})
 			flat.originals = append(flat.originals, s)
 			if len(s.Children) > 0 {
 				truncated, err := walk(s.Children, depth+1)

@@ -9,8 +9,11 @@ package core
 
 import "context"
 
-// Position is a zero-based LSP-style position. Character is a UTF-16 code-unit
-// offset (tsgo reports positionEncoding utf-16).
+// PositionCharacterEncoding names the code-unit encoding used by Position.Character.
+const PositionCharacterEncoding = "utf-16"
+
+// Position is a zero-based source position. Character is a UTF-16 code-unit
+// offset, including two code units for a non-BMP Unicode code point.
 type Position struct {
 	Line      int `json:"line"`
 	Character int `json:"character"`
@@ -29,23 +32,61 @@ type Location struct {
 	Range Range  `json:"range"`
 }
 
-// SymbolKind mirrors the LSP SymbolKind names we care about (lower-cased,
-// human-readable) so tool output is legible without a numeric lookup table.
+// SymbolKind is a provider-independent symbol category. Providers convert
+// their protocol-specific kinds to this vocabulary and use SymbolKindUnknown
+// for values outside it.
 type SymbolKind string
 
-// Symbol is one entry in a file outline. Signature is a compact,
-// provider-authoritative declaration or type summary; it may be empty when the
-// provider cannot produce one without including a body. Detail preserves the
-// provider's independent document-symbol detail.
-type Symbol struct {
+const (
+	SymbolKindUnknown       SymbolKind = "unknown"
+	SymbolKindFile          SymbolKind = "file"
+	SymbolKindModule        SymbolKind = "module"
+	SymbolKindNamespace     SymbolKind = "namespace"
+	SymbolKindPackage       SymbolKind = "package"
+	SymbolKindClass         SymbolKind = "class"
+	SymbolKindMethod        SymbolKind = "method"
+	SymbolKindProperty      SymbolKind = "property"
+	SymbolKindField         SymbolKind = "field"
+	SymbolKindConstructor   SymbolKind = "constructor"
+	SymbolKindEnum          SymbolKind = "enum"
+	SymbolKindInterface     SymbolKind = "interface"
+	SymbolKindFunction      SymbolKind = "function"
+	SymbolKindVariable      SymbolKind = "variable"
+	SymbolKindConstant      SymbolKind = "constant"
+	SymbolKindString        SymbolKind = "string"
+	SymbolKindNumber        SymbolKind = "number"
+	SymbolKindBoolean       SymbolKind = "boolean"
+	SymbolKindArray         SymbolKind = "array"
+	SymbolKindObject        SymbolKind = "object"
+	SymbolKindKey           SymbolKind = "key"
+	SymbolKindNull          SymbolKind = "null"
+	SymbolKindEnumMember    SymbolKind = "enummember"
+	SymbolKindStruct        SymbolKind = "struct"
+	SymbolKindEvent         SymbolKind = "event"
+	SymbolKindOperator      SymbolKind = "operator"
+	SymbolKindTypeParameter SymbolKind = "typeparameter"
+)
+
+// SymbolAtom is the provider-independent identity and source shape shared by
+// hierarchical symbols and flat projections. Range is the full symbol span and
+// SelRange identifies its name. Signature is an optional provider-authoritative
+// declaration or type summary; Detail is independent document-symbol detail.
+// File is an absolute canonical host path.
+type SymbolAtom struct {
 	Name      string     `json:"name"`
 	Kind      SymbolKind `json:"kind"`
 	File      string     `json:"file"`
-	Range     Range      `json:"range"`    // full symbol range
-	SelRange  Range      `json:"selRange"` // the name/selection range (used for name→position resolution)
-	Signature string     `json:"signature,omitempty"`
-	Detail    string     `json:"detail,omitempty"`
-	Children  []Symbol   `json:"children,omitempty"`
+	Range     Range      `json:"range"`
+	SelRange  Range      `json:"selRange"`
+	Signature string     `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
+	Detail    string     `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
+}
+
+// Symbol is one SymbolAtom in the canonical provider hierarchy. Children, not
+// projection depth, owns symbol hierarchy.
+type Symbol struct {
+	SymbolAtom
+	Children []Symbol `json:"children,omitempty"`
 }
 
 // Freshness is stamped on every tool result to identify the source generation
