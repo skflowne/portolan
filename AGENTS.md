@@ -32,7 +32,7 @@ gofmt -l internal/ cmd/ eval/   # must print nothing
 go test ./...
 ```
 
-All four must pass before completion. Concurrency and lifecycle changes also require `go test -race` on affected packages. A skip is not a pass. Go 1.26+ and `tsgo` (`npm i -g @typescript/native-preview`) must be available; LSP and Tier A checks depend on `tsgo --lsp -stdio`.
+All four must pass before completion. Concurrency and lifecycle changes also require `go test -race` on affected packages. A skip is not a pass. Go 1.26+ and the Tier A-pinned `tsgo` (`npm i -g @typescript/native-preview@7.0.0-dev.20260707.2`) must be available; LSP and Tier A checks depend on `tsgo --lsp -stdio`. Use `PORTOLAN_REQUIRE_TSGO=1` for required eval execution that fails on a missing or incompatible analyzer.
 
 ## Documentation and handoff
 

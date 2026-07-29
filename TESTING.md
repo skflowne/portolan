@@ -34,9 +34,10 @@ then stop. Specifically:
 Measurement suites never join the `go test ./...` gate. Tier A is the exception and is already a
 gate, because retrieval correctness is pass/fail on a pinned fixture.
 
-The integration and end-to-end layers skip when `tsgo` or Unix sockets are unavailable. **A skip is
-not a pass.** Do not complete a change whose only coverage sits in a layer that skipped locally;
-report any skip in the gate output.
+The integration and end-to-end layers skip when the pinned `tsgo` or Unix sockets are unavailable.
+**A skip is not a pass.** Do not complete a change whose only coverage sits in a layer that skipped
+locally; report any skip in the gate output. Set `PORTOLAN_REQUIRE_TSGO=1` for required eval
+execution: missing or incompatible `tsgo` then fails instead of skipping.
 
 ## Red-green procedure
 
@@ -75,4 +76,11 @@ Organize tests by behavior and split files that have become collections of unrel
 `eval/tiera` is the real-daemon MCP retrieval gate; `eval/lifecycle` covers startup and shutdown.
 Keep both green. Eval suites use `eval/testinfra`, never a second daemon harness.
 
-`tsgo` must be on `PATH` for LSP and Tier A checks; see the environment requirements in `AGENTS.md`.
+Tier A is authored against `tsgo` `Version 7.0.0-dev.20260707.2`. Install the matching
+`@typescript/native-preview@7.0.0-dev.20260707.2` package and run the required gate with:
+
+```bash
+PORTOLAN_REQUIRE_TSGO=1 go test -count=1 ./eval/tiera
+```
+
+This mode fails on a missing or incompatible analyzer rather than accepting a skip.
