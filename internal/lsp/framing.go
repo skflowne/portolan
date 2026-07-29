@@ -48,36 +48,8 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-type contextWorkResult[T any] struct {
-	value T
-	err   error
-}
-
-// runContextWork bounds pure in-memory work that has no context-aware API.
-// The buffered result lets canceled callers return while finite work exits.
-func runContextWork[T any](ctx context.Context, work func() (T, error)) (T, error) {
-	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	result := make(chan contextWorkResult[T], 1)
-	go func() {
-		value, err := work()
-		result <- contextWorkResult[T]{value: value, err: err}
-	}()
-	select {
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	case got := <-result:
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
-		return got.value, got.err
-	}
-}
-
 func marshalMessage(ctx context.Context, v any) ([]byte, error) {
-	return runContextWork(ctx, func() ([]byte, error) {
+	return runFiniteWork(ctx, nil, func() ([]byte, error) {
 		data, err := json.Marshal(v)
 		if err != nil {
 			return nil, fmt.Errorf("lsp: marshaling message: %w", err)
@@ -121,7 +93,7 @@ const (
 )
 
 func (t *transport) writeFrameLocked(ctx context.Context, data []byte) (bool, error) {
-	frame, err := runContextWork(ctx, func() ([]byte, error) {
+	frame, err := runFiniteWork(ctx, nil, func() ([]byte, error) {
 		return frameBytes(data), nil
 	})
 	if err != nil {

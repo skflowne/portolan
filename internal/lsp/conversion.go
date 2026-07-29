@@ -22,7 +22,7 @@ func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string
 	if isJSONNull(raw) {
 		return nil, nil
 	}
-	return runContextWork(ctx, func() ([]core.Symbol, error) {
+	return runFiniteWork(ctx, nil, func() ([]core.Symbol, error) {
 		var syms []lspDocumentSymbol
 		if err := json.Unmarshal(raw, &syms); err != nil {
 			return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
@@ -54,7 +54,7 @@ func decodeLocations(ctx context.Context, raw json.RawMessage) ([]core.Location,
 	if isJSONNull(raw) {
 		return nil, nil
 	}
-	return runContextWork(ctx, func() ([]core.Location, error) {
+	return runFiniteWork(ctx, nil, func() ([]core.Location, error) {
 		var list []rawLocation
 		if err := json.Unmarshal(raw, &list); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
