@@ -556,7 +556,7 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 					Name: "Outer", Kind: "class", File: file,
 					Range: rng(0, 0, 10, 0), SelRange: rng(0, 6, 0, 11),
 					Signature: "class Outer", Detail: "document symbol detail",
-				}, symbolNode(core.Symbol{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "(method) Outer.Inner(): void"})),
+				}, symbolNode(core.Symbol{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "Inner(): void"})),
 			},
 		},
 	}
@@ -583,7 +583,7 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 		t.Fatalf("expected Inner at depth 1 second, got %+v", out.Symbols[1])
 	}
 	if out.Symbols[0].Signature != "class Outer" || out.Symbols[0].Detail != "document symbol detail" ||
-		out.Symbols[1].Signature != "(method) Outer.Inner(): void" || out.Symbols[1].Detail != "" {
+		out.Symbols[1].Signature != "Inner(): void" || out.Symbols[1].Detail != "" {
 		t.Fatalf("flattened signature/detail fields = %+v, want independent provider values", out.Symbols)
 	}
 	if out.Freshness.Generation != 2 {
