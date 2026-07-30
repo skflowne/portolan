@@ -32,6 +32,7 @@ runs JSONL-only and never connects to an implicit collector.
 
 Docs:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **visual architecture** (Mermaid diagrams): components, request flow, the staleness barrier, package graph, phase roadmap.
+- [`PROVIDER_NORMALIZATION.md`](./PROVIDER_NORMALIZATION.md) — canonical provider-normalization ownership, response semantics, inventory, and bounded enrichment contract.
 - [`INITIAL_RESEARCH.md`](./INITIAL_RESEARCH.md) — evidence: tokens vs correctness, prior art.
 - [`INTEGRATION_CONSTRAINTS.md`](./INTEGRATION_CONSTRAINTS.md) — building into Claude Code; decisions + problem map.
 - [`EVAL.md`](./EVAL.md) — how we measure whether it actually helps (from day one).
