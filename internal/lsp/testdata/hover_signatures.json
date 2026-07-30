@@ -45,13 +45,13 @@
     "name": "unknown kind",
     "symbol": {"name": "area", "kind": "unknown"},
     "result": {"contents": "(method) Circle.area(): number"},
-    "want": "(method) Circle.area(): number"
+    "want": ""
   },
   {
     "name": "mismatched method",
     "symbol": {"name": "area", "kind": "method"},
     "result": {"contents": "(method) Circle.perimeter(): number"},
-    "want": "(method) Circle.perimeter(): number"
+    "want": ""
   },
   {
     "name": "legitimate adornment text",

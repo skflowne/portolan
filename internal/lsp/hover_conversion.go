@@ -72,70 +72,74 @@ func markdownCode(markdown string) (string, error) {
 }
 
 func normalizeTSGoSignature(display string, symbol core.Symbol) string {
-	switch symbol.Kind {
-	case core.SymbolKindMethod:
-		return normalizeTSGoMember(display, symbol.Name, "(method) ", "(<")
-	case core.SymbolKindProperty:
-		return normalizeTSGoMember(display, symbol.Name, "(property) ", ":?!")
-	case core.SymbolKindConstructor:
-		if symbol.Name == "constructor" {
+	if strings.HasPrefix(display, "(method) ") {
+		if symbol.Kind == core.SymbolKindMethod {
+			return normalizeTSGoMember(display, symbol.Name, "(method) ", "(<")
+		}
+		return ""
+	}
+	if strings.HasPrefix(display, "(property) ") {
+		if symbol.Kind == core.SymbolKindProperty {
+			return normalizeTSGoMember(display, symbol.Name, "(property) ", ":?!")
+		}
+		return ""
+	}
+	if strings.HasPrefix(display, "constructor ") {
+		if symbol.Kind == core.SymbolKindConstructor && symbol.Name == "constructor" {
 			return normalizeTSGoConstructor(display)
 		}
-	case core.SymbolKindFunction:
-		if symbol.Name == "default" || strings.HasSuffix(symbol.Name, " callback") {
+		return ""
+	}
+	if strings.HasPrefix(display, "function (Anonymous function)") {
+		if symbol.Kind == core.SymbolKindFunction && (symbol.Name == "default" || strings.HasSuffix(symbol.Name, " callback")) {
 			return normalizeTSGoAnonymousFunction(display)
 		}
+		return ""
 	}
 	return display
 }
 
 func normalizeTSGoMember(display, name, prefix, allowedTail string) string {
-	if name == "" || !strings.HasPrefix(display, prefix) {
-		return display
+	if name == "" {
+		return ""
 	}
 	rest := strings.TrimPrefix(display, prefix)
 	separator := strings.LastIndex(rest, "."+name)
 	if separator <= 0 {
-		return display
+		return ""
 	}
 	qualifier := rest[:separator]
 	tail := rest[separator+1+len(name):]
 	if strings.TrimSpace(qualifier) != qualifier || strings.ContainsAny(qualifier, "\r\n") || tail == "" || !strings.ContainsRune(allowedTail, rune(tail[0])) {
-		return display
+		return ""
 	}
 	return name + tail
 }
 
 func normalizeTSGoConstructor(display string) string {
 	const prefix = "constructor "
-	if !strings.HasPrefix(display, prefix) {
-		return display
-	}
 	rest := strings.TrimPrefix(display, prefix)
 	open := strings.IndexByte(rest, '(')
 	close := strings.LastIndexByte(rest, ')')
 	if open <= 0 || close <= open {
-		return display
+		return ""
 	}
 	className := rest[:open]
 	if strings.TrimSpace(className) != className || strings.ContainsAny(className, " \t\r\n") {
-		return display
+		return ""
 	}
 	suffix := rest[close+1:]
 	if suffix != "" && suffix != ": "+className {
-		return display
+		return ""
 	}
 	return "constructor" + rest[open:close+1]
 }
 
 func normalizeTSGoAnonymousFunction(display string) string {
 	const prefix = "function (Anonymous function)"
-	if !strings.HasPrefix(display, prefix) {
-		return display
-	}
 	tail := strings.TrimPrefix(display, prefix)
 	if !strings.HasPrefix(tail, "(") {
-		return display
+		return ""
 	}
 	return tail
 }
