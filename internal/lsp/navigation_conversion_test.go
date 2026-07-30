@@ -48,13 +48,19 @@ func TestDocumentSymbolAdapterConvertsPinnedTsgoHierarchy(t *testing.T) {
 		t.Fatalf("class hierarchy = %+v", nodes[1])
 	}
 	wantMembers := []struct {
-		name string
-		kind core.SymbolKind
-	}{{"constructor", core.SymbolKindConstructor}, {"radius", core.SymbolKindProperty}, {"area", core.SymbolKindMethod}}
+		name     string
+		kind     core.SymbolKind
+		rangeEnd core.Position
+		selRange core.Range
+	}{
+		{"constructor", core.SymbolKindConstructor, core.Position{Line: 7, Character: 48}, core.Range{Start: core.Position{Line: 7, Character: 2}, End: core.Position{Line: 7, Character: 2}}},
+		{"radius", core.SymbolKindProperty, core.Position{Line: 7, Character: 44}, core.Range{Start: core.Position{Line: 7, Character: 30}, End: core.Position{Line: 7, Character: 36}}},
+		{"area", core.SymbolKindMethod, core.Position{Line: 11, Character: 3}, core.Range{Start: core.Position{Line: 9, Character: 2}, End: core.Position{Line: 9, Character: 6}}},
+	}
 	for i, want := range wantMembers {
 		member := nodes[1].Children[i]
-		if member.Name != want.name || member.Kind != want.kind || member.File != "/repo/shapes.ts" {
-			t.Errorf("member %d = %+v, want %s/%s in canonical file", i, member, want.name, want.kind)
+		if member.Name != want.name || member.Kind != want.kind || member.File != "/repo/shapes.ts" || member.Range.End != want.rangeEnd || member.SelRange != want.selRange {
+			t.Errorf("member %d = %+v, want %s/%s with canonical file and ranges", i, member, want.name, want.kind)
 		}
 	}
 	if nodes[2].Name != "totalArea" || nodes[2].Kind != core.SymbolKindFunction || len(nodes[2].Children) != 1 || nodes[2].Children[0].Name != "shapes.reduce() callback" || nodes[2].Children[0].Kind != core.SymbolKindFunction {
@@ -98,8 +104,12 @@ func TestLocationAdapterConvertsLocationAndLocationLinkArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeLocations: %v", err)
 	}
-	if len(locations) != 2 || locations[0].File != "/repo/a.ts" || locations[0].Range.Start != (core.Position{Line: 1, Character: 2}) || locations[1].File != "/repo/b.ts" || locations[1].Range.Start != (core.Position{Line: 4, Character: 6}) {
-		t.Fatalf("locations = %+v", locations)
+	want := []core.Location{
+		{File: "/repo/a.ts", Range: core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 3}}},
+		{File: "/repo/b.ts", Range: core.Range{Start: core.Position{Line: 4, Character: 6}, End: core.Position{Line: 4, Character: 7}}},
+	}
+	if len(locations) != len(want) || locations[0] != want[0] || locations[1] != want[1] {
+		t.Fatalf("locations = %+v, want %+v", locations, want)
 	}
 }
 
