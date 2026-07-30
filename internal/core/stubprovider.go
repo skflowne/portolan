@@ -7,7 +7,7 @@ import "context"
 type StubProvider struct {
 	Definitions map[string][]Location // keyed by file
 	Refs        map[string][]Location
-	Symbols     map[string][]Symbol
+	Symbols     map[string][]SymbolNode
 }
 
 func (s *StubProvider) Definition(_ context.Context, file string, _ Position) ([]Location, error) {
@@ -18,7 +18,7 @@ func (s *StubProvider) References(_ context.Context, file string, _ Position, _ 
 	return s.Refs[file], nil
 }
 
-func (s *StubProvider) DocumentSymbols(_ context.Context, file string) ([]Symbol, error) {
+func (s *StubProvider) DocumentSymbols(_ context.Context, file string) ([]SymbolNode, error) {
 	return s.Symbols[file], nil
 }
 

@@ -69,15 +69,13 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 	}
 }
 
-func flattenCoreSymbols(symbols []core.Symbol) []core.Symbol {
+func flattenCoreSymbols(symbols []core.SymbolNode) []core.Symbol {
 	var flat []core.Symbol
-	var visit func([]core.Symbol)
-	visit = func(current []core.Symbol) {
+	var visit func([]core.SymbolNode)
+	visit = func(current []core.SymbolNode) {
 		for _, symbol := range current {
-			children := symbol.Children
-			symbol.Children = nil
-			flat = append(flat, symbol)
-			visit(children)
+			flat = append(flat, symbol.Symbol)
+			visit(symbol.Children)
 		}
 	}
 	visit(symbols)

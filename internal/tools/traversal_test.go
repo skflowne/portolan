@@ -11,11 +11,11 @@ import (
 )
 
 func TestTreeTransformsHonorContext(t *testing.T) {
-	symbols := []core.Symbol{{
-		Name: "Container",
-		Children: []core.Symbol{
-			{Name: "First"},
-			{Name: "Target"},
+	symbols := []core.SymbolNode{{
+		Symbol: core.Symbol{Name: "Container"},
+		Children: []core.SymbolNode{
+			{Symbol: core.Symbol{Name: "First"}},
+			{Symbol: core.Symbol{Name: "Target"}},
 		},
 	}}
 
@@ -35,9 +35,9 @@ func TestTreeTransformsHonorContext(t *testing.T) {
 }
 
 func TestOutlineTraversalStopsAtResultCap(t *testing.T) {
-	symbols := make([]core.Symbol, 100)
+	symbols := make([]core.SymbolNode, 100)
 	for i := range symbols {
-		symbols[i].Name = fmt.Sprintf("Symbol%d", i)
+		symbols[i].Symbol.Name = fmt.Sprintf("Symbol%d", i)
 	}
 	ctx := &countingContext{Context: context.Background()}
 
@@ -48,9 +48,12 @@ func TestOutlineTraversalStopsAtResultCap(t *testing.T) {
 	if !flat.truncated || len(flat.outline) != 2 || flat.outline[0].Name != "Symbol0" || flat.outline[1].Name != "Symbol1" {
 		t.Fatalf("flattened output = %+v", flat)
 	}
-	wantOriginals := symbols[:2]
+	wantOriginals := []core.Symbol{symbols[0].Symbol, symbols[1].Symbol}
 	if !reflect.DeepEqual(flat.originals, wantOriginals) {
 		t.Fatalf("original symbols = %+v, want %+v", flat.originals, wantOriginals)
+	}
+	if !reflect.DeepEqual(flat.outline[0].Symbol, symbols[0].Symbol) {
+		t.Fatalf("outline atom = %+v, want canonical symbol %+v", flat.outline[0].Symbol, symbols[0].Symbol)
 	}
 	if ctx.checks != 4 {
 		t.Fatalf("context checks = %d, want setup plus 3 nodes visited to prove truncation", ctx.checks)
