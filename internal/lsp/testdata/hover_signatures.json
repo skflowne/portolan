@@ -54,6 +54,60 @@
     "want": ""
   },
   {
+    "name": "accessor value",
+    "symbol": {"name": "value", "kind": "property"},
+    "result": {"contents": "(accessor) Box<T>.value: T"},
+    "want": "value: T"
+  },
+  {
+    "name": "accessor size",
+    "symbol": {"name": "size", "kind": "property"},
+    "result": {"contents": "(accessor) Box<T>.size: number"},
+    "want": "size: number"
+  },
+  {
+    "name": "unqualified method",
+    "symbol": {"name": "method", "kind": "method"},
+    "result": {"contents": "(method) method(x: number): number"},
+    "want": "method(x: number): number"
+  },
+  {
+    "name": "unqualified property",
+    "symbol": {"name": "prop", "kind": "property"},
+    "result": {"contents": "(property) prop: number"},
+    "want": "prop: number"
+  },
+  {
+    "name": "optional method",
+    "symbol": {"name": "optional", "kind": "method"},
+    "result": {"contents": "(method) Weird.optional?(): void"},
+    "want": "optional?(): void"
+  },
+  {
+    "name": "mismatched accessor name",
+    "symbol": {"name": "value", "kind": "property"},
+    "result": {"contents": "(accessor) Box<T>.size: number"},
+    "want": ""
+  },
+  {
+    "name": "mismatched accessor kind",
+    "symbol": {"name": "value", "kind": "method"},
+    "result": {"contents": "(accessor) Box<T>.value: T"},
+    "want": ""
+  },
+  {
+    "name": "mismatched unqualified method name",
+    "symbol": {"name": "other", "kind": "method"},
+    "result": {"contents": "(method) method(x: number): number"},
+    "want": ""
+  },
+  {
+    "name": "mismatched unqualified property kind",
+    "symbol": {"name": "prop", "kind": "method"},
+    "result": {"contents": "(property) prop: number"},
+    "want": ""
+  },
+  {
     "name": "legitimate adornment text",
     "symbol": {"name": "describe", "kind": "function"},
     "result": {"contents": "function describe(value: \"(property)\"): string"},

@@ -74,13 +74,19 @@ func markdownCode(markdown string) (string, error) {
 func normalizeTSGoSignature(display string, symbol core.Symbol) string {
 	if strings.HasPrefix(display, "(method) ") {
 		if symbol.Kind == core.SymbolKindMethod {
-			return normalizeTSGoMember(display, symbol.Name, "(method) ", "(<")
+			return normalizeTSGoMember(display, symbol.Name, "(method) ", "(?<")
 		}
 		return ""
 	}
 	if strings.HasPrefix(display, "(property) ") {
 		if symbol.Kind == core.SymbolKindProperty {
 			return normalizeTSGoMember(display, symbol.Name, "(property) ", ":?!")
+		}
+		return ""
+	}
+	if strings.HasPrefix(display, "(accessor) ") {
+		if symbol.Kind == core.SymbolKindProperty {
+			return normalizeTSGoMember(display, symbol.Name, "(accessor) ", ":")
 		}
 		return ""
 	}
@@ -104,13 +110,21 @@ func normalizeTSGoMember(display, name, prefix, allowedTail string) string {
 		return ""
 	}
 	rest := strings.TrimPrefix(display, prefix)
-	separator := strings.LastIndex(rest, "."+name)
-	if separator <= 0 {
-		return ""
+	var tail string
+	if strings.HasPrefix(rest, name) {
+		tail = rest[len(name):]
+	} else {
+		separator := strings.LastIndex(rest, "."+name)
+		if separator <= 0 {
+			return ""
+		}
+		qualifier := rest[:separator]
+		if strings.TrimSpace(qualifier) != qualifier || strings.ContainsAny(qualifier, "\r\n") {
+			return ""
+		}
+		tail = rest[separator+1+len(name):]
 	}
-	qualifier := rest[:separator]
-	tail := rest[separator+1+len(name):]
-	if strings.TrimSpace(qualifier) != qualifier || strings.ContainsAny(qualifier, "\r\n") || tail == "" || !strings.ContainsRune(allowedTail, rune(tail[0])) {
+	if tail == "" || !strings.ContainsRune(allowedTail, rune(tail[0])) {
 		return ""
 	}
 	return name + tail
