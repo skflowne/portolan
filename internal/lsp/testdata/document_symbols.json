@@ -1,0 +1,63 @@
+[
+  {
+    "name": "Callable",
+    "detail": "interface detail",
+    "kind": 11,
+    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 4, "character": 1}},
+    "selectionRange": {"start": {"line": 0, "character": 17}, "end": {"line": 0, "character": 25}},
+    "children": [
+      {
+        "name": "()",
+        "kind": 6,
+        "range": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 26}},
+        "selectionRange": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 2}}
+      }
+    ]
+  },
+  {
+    "name": "Circle",
+    "kind": 5,
+    "range": {"start": {"line": 6, "character": 0}, "end": {"line": 12, "character": 1}},
+    "selectionRange": {"start": {"line": 6, "character": 13}, "end": {"line": 6, "character": 19}},
+    "children": [
+      {
+        "name": "constructor",
+        "kind": 9,
+        "range": {"start": {"line": 7, "character": 2}, "end": {"line": 7, "character": 48}},
+        "selectionRange": {"start": {"line": 7, "character": 2}, "end": {"line": 7, "character": 2}}
+      },
+      {
+        "name": "radius",
+        "kind": 7,
+        "range": {"start": {"line": 7, "character": 14}, "end": {"line": 7, "character": 44}},
+        "selectionRange": {"start": {"line": 7, "character": 30}, "end": {"line": 7, "character": 36}}
+      },
+      {
+        "name": "area",
+        "kind": 6,
+        "range": {"start": {"line": 9, "character": 2}, "end": {"line": 11, "character": 3}},
+        "selectionRange": {"start": {"line": 9, "character": 2}, "end": {"line": 9, "character": 6}}
+      }
+    ]
+  },
+  {
+    "name": "totalArea",
+    "kind": 12,
+    "range": {"start": {"line": 14, "character": 0}, "end": {"line": 16, "character": 1}},
+    "selectionRange": {"start": {"line": 14, "character": 16}, "end": {"line": 14, "character": 25}},
+    "children": [
+      {
+        "name": "shapes.reduce() callback",
+        "kind": 12,
+        "range": {"start": {"line": 15, "character": 23}, "end": {"line": 15, "character": 49}},
+        "selectionRange": {"start": {"line": 15, "character": 23}, "end": {"line": 15, "character": 23}}
+      }
+    ]
+  },
+  {
+    "name": "future",
+    "kind": 999,
+    "range": {"start": {"line": 18, "character": 0}, "end": {"line": 18, "character": 6}},
+    "selectionRange": {"start": {"line": 18, "character": 0}, "end": {"line": 18, "character": 6}}
+  }
+]
