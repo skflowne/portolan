@@ -28,13 +28,13 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 				"new()@2":          "new (value: string): Date",
 				"[]@3":             "[key: string]: unknown",
 				"assignedArrow@6":  "const assignedArrow: (x: number) => number",
-				"map() callback@8": "function (Anonymous function)(x: number): number",
-				"map() callback@9": "function (Anonymous function)(x: number): number",
+				"map() callback@8": "(x: number): number",
+				"map() callback@9": "(x: number): number",
 			},
 		},
-		{file: "default-arrow.ts", want: map[string]string{"default@0": "function (Anonymous function)(): number"}},
+		{file: "default-arrow.ts", want: map[string]string{"default@0": "(): number"}},
 		{file: "default-function.ts", want: map[string]string{"default@0": "function default(): number"}},
-		{file: "default-class.ts", want: map[string]string{"default@0": "class default", "method@1": "(method) default.method(): void"}},
+		{file: "default-class.ts", want: map[string]string{"default@0": "class default", "method@1": "method(): void"}},
 	}
 
 	for _, tc := range tests {
