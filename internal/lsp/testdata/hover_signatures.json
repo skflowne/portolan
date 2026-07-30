@@ -1,0 +1,62 @@
+[
+  {
+    "name": "method",
+    "symbol": {"name": "area", "kind": "method"},
+    "result": {"contents": {"kind": "markdown", "value": "TypeScript quick info\n```typescript\n(method) Circle.area(): number\n```\nReturns the area."}},
+    "want": "area(): number"
+  },
+  {
+    "name": "property",
+    "symbol": {"name": "radius", "kind": "property"},
+    "result": {"contents": {"kind": "markdown", "value": "```typescript\n(property) Circle.radius: number\n```"}},
+    "want": "radius: number"
+  },
+  {
+    "name": "constructor",
+    "symbol": {"name": "constructor", "kind": "constructor"},
+    "result": {"contents": {"kind": "markdown", "value": "```typescript\nconstructor Circle(radius: number): Circle\n```"}},
+    "want": "constructor(radius: number)"
+  },
+  {
+    "name": "function",
+    "symbol": {"name": "totalArea", "kind": "function"},
+    "result": {"contents": {"kind": "plaintext", "value": "function totalArea(shapes: Shape[]): number"}},
+    "want": "function totalArea(shapes: Shape[]): number"
+  },
+  {
+    "name": "anonymous callback",
+    "symbol": {"name": "items.map() callback", "kind": "function"},
+    "result": {"contents": {"kind": "markdown", "value": "```typescript\nfunction (Anonymous function)(value: number): string\n```"}},
+    "want": "(value: number): string"
+  },
+  {
+    "name": "default anonymous function",
+    "symbol": {"name": "default", "kind": "function"},
+    "result": {"contents": "function (Anonymous function)(): number"},
+    "want": "(): number"
+  },
+  {
+    "name": "missing hover",
+    "symbol": {"name": "missing", "kind": "function"},
+    "result": null,
+    "want": ""
+  },
+  {
+    "name": "unknown kind",
+    "symbol": {"name": "area", "kind": "unknown"},
+    "result": {"contents": "(method) Circle.area(): number"},
+    "want": "(method) Circle.area(): number"
+  },
+  {
+    "name": "mismatched method",
+    "symbol": {"name": "area", "kind": "method"},
+    "result": {"contents": "(method) Circle.perimeter(): number"},
+    "want": "(method) Circle.perimeter(): number"
+  },
+  {
+    "name": "legitimate adornment text",
+    "symbol": {"name": "describe", "kind": "function"},
+    "result": {"contents": "function describe(value: \"(property)\"): string"},
+    "want": "function describe(value: \"(property)\"): string"
+  }
+]

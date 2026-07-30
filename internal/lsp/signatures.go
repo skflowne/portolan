@@ -17,6 +17,7 @@ const maxConcurrentSignatureRequests = 8
 type signaturePlan struct {
 	position core.Position
 	direct   string
+	symbol   core.Symbol
 }
 
 func (p *Provider) SymbolSignatures(ctx context.Context, file string, symbols []core.Symbol) ([]string, error) {
@@ -56,7 +57,7 @@ func needsSignatureSource(symbols []core.Symbol) bool {
 }
 
 func planSignature(symbol core.Symbol, source string) (signaturePlan, error) {
-	plan := signaturePlan{position: symbol.SelRange.Start}
+	plan := signaturePlan{position: symbol.SelRange.Start, symbol: symbol}
 	if symbol.SelRange.Start != symbol.SelRange.End || symbol.Name == "constructor" {
 		return plan, nil
 	}
@@ -90,7 +91,7 @@ func planSignature(symbol core.Symbol, source string) (signaturePlan, error) {
 	return plan, nil
 }
 
-type hoverDecoder func(json.RawMessage) (string, error)
+type hoverDecoder func(json.RawMessage, core.Symbol) (string, error)
 
 func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, request requestFunc, decode hoverDecoder) ([]string, error) {
 	signatures := make([]string, len(plans))
@@ -134,7 +135,7 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 				if err == nil {
 					var signature string
 					signature, err = runFiniteWork(workCtx, nil, func() (string, error) {
-						return decode(raw)
+						return decode(raw, plans[index].symbol)
 					})
 					if err == nil {
 						signatures[index] = signature
@@ -169,65 +170,6 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 		return nil, err
 	}
 	return signatures, nil
-}
-
-func decodeHoverSignature(raw json.RawMessage) (string, error) {
-	if isJSONNull(raw) {
-		return "", nil
-	}
-	var hover hoverResult
-	if err := json.Unmarshal(raw, &hover); err != nil {
-		return "", fmt.Errorf("lsp: decoding hover result: %w", err)
-	}
-	return decodeHoverContents(hover.Contents)
-}
-
-func decodeHoverContents(raw json.RawMessage) (string, error) {
-	if isJSONNull(raw) {
-		return "", nil
-	}
-	var markup markupContent
-	if err := json.Unmarshal(raw, &markup); err == nil && markup.Value != "" {
-		if markup.Kind == "markdown" {
-			return markdownCode(markup.Value), nil
-		}
-		return strings.TrimSpace(markup.Value), nil
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		return strings.TrimSpace(text), nil
-	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err == nil {
-		for _, item := range items {
-			value, err := decodeHoverContents(item)
-			if err != nil {
-				return "", err
-			}
-			if value != "" {
-				return value, nil
-			}
-		}
-		return "", nil
-	}
-	return "", fmt.Errorf("lsp: unsupported hover contents: %s", raw)
-}
-
-func markdownCode(markdown string) string {
-	start := strings.Index(markdown, "```")
-	if start < 0 {
-		return strings.TrimSpace(markdown)
-	}
-	lineEnd := strings.IndexByte(markdown[start:], '\n')
-	if lineEnd < 0 {
-		return strings.TrimSpace(markdown)
-	}
-	contentStart := start + lineEnd + 1
-	end := strings.Index(markdown[contentStart:], "```")
-	if end < 0 {
-		return strings.TrimSpace(markdown)
-	}
-	return strings.TrimSpace(markdown[contentStart : contentStart+end])
 }
 
 func textInRange(source string, r core.Range) (string, error) {
