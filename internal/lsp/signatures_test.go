@@ -257,6 +257,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Selected extends (a < b ? A : B)",
 		},
 		{
+			name:   "reserved-word heritage property",
+			source: "class Selected extends constructors.new {}",
+			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
+			want:   "class Selected extends constructors.new",
+		},
+		{
 			name:   "UTF-16 range",
 			source: "😀 export class Café<T> extends Base<T> {}",
 			symbol: core.Symbol{Name: "Café", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{Character: 3}, End: core.Position{Character: 42}}},
