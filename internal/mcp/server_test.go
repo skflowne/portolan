@@ -24,15 +24,15 @@ func testTools(t *testing.T) *tools.Tools {
 	t.Helper()
 	file := "/repo/main.go"
 	provider := &core.StubProvider{
-		Symbols: map[string][]core.Symbol{
+		Symbols: map[string][]core.SymbolNode{
 			file: {
-				{Name: "DoThing", Kind: "function", File: file,
+				{Symbol: core.Symbol{Name: "DoThing", Kind: "function", File: file,
 					Range: core.Range{Start: core.Position{Line: 1}, End: core.Position{Line: 2}},
 					SelRange: core.Range{
 						Start: core.Position{Line: 1, Character: 5},
 						End:   core.Position{Line: 1, Character: 12},
 					},
-				},
+				}},
 			},
 		},
 		Definitions: map[string][]core.Location{
