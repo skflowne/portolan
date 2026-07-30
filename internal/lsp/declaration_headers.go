@@ -183,12 +183,16 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			}
 			bracketDepth--
 		case '<':
-			angleDepth++
+			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
+				angleDepth++
+			}
 		case '>':
-			if i == start || source[i-1] != '=' {
-				if angleDepth > 0 {
-					angleDepth--
+			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
+				(i == start || source[i-1] != '=') {
+				if angleDepth == 0 {
+					return 0, false, nil
 				}
+				angleDepth--
 			}
 		case '{':
 			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
