@@ -151,6 +151,7 @@ func skipDeclarationTrivia(ctx context.Context, source string, start, end int) (
 
 func declarationBodyOffset(ctx context.Context, source string, start, end int) (int, bool, error) {
 	parenDepth, bracketDepth, braceDepth, angleDepth := 0, 0, 0, 0
+	last := "value"
 	for i := start; i < end; {
 		if err := scanContext(ctx, i-start); err != nil {
 			return 0, false, err
@@ -163,50 +164,80 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			if !complete {
 				return 0, false, nil
 			}
+			if kind == lexicalSpanLiteral {
+				last = "value"
+			}
 			i = next
+			continue
+		}
+		if keyword, ok := declarationKeywordAt(source, i, end); ok {
+			last = keyword
+			i += len(keyword)
 			continue
 		}
 
 		switch source[i] {
 		case '(':
 			parenDepth++
+			last = "("
 		case ')':
 			if parenDepth == 0 {
 				return 0, false, nil
 			}
 			parenDepth--
+			last = "value"
 		case '[':
 			bracketDepth++
+			last = "["
 		case ']':
 			if bracketDepth == 0 {
 				return 0, false, nil
 			}
 			bracketDepth--
+			last = "value"
 		case '<':
 			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
 				angleDepth++
+				last = "<"
 			}
 		case '>':
-			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
-				(i == start || source[i-1] != '=') {
-				if angleDepth == 0 {
+			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
+				if i > start && source[i-1] == '=' {
+					last = "=>"
+					break
+				}
+				if angleDepth == 0 || last != "," && incompleteDeclarationToken(last) {
 					return 0, false, nil
 				}
 				angleDepth--
+				last = "value"
 			}
 		case '{':
 			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
+				if incompleteDeclarationToken(last) {
+					return 0, false, nil
+				}
 				return i, true, nil
 			}
 			braceDepth++
+			last = "{"
 		case '}':
 			if braceDepth == 0 {
 				return 0, false, nil
 			}
 			braceDepth--
+			last = "value"
 		case ';':
 			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
 				return 0, false, nil
+			}
+			last = "value"
+		case ',', '?', ':', '=', '&', '|', '.':
+			last = string(source[i])
+		default:
+			r, _ := utf8.DecodeRuneInString(source[i:end])
+			if !unicode.IsSpace(r) {
+				last = "value"
 			}
 		}
 		_, size := utf8.DecodeRuneInString(source[i:end])
@@ -219,6 +250,25 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 		return 0, false, err
 	}
 	return 0, false, nil
+}
+
+func declarationKeywordAt(source string, start, end int) (string, bool) {
+	for _, keyword := range []string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"} {
+		if strings.HasPrefix(source[start:end], keyword) && tokenBoundary(source, start, keyword) {
+			return keyword, true
+		}
+	}
+	return "", false
+}
+
+func incompleteDeclarationToken(token string) bool {
+	switch token {
+	case "extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract",
+		"(", "[", "{", "<", ",", "?", ":", "=", "=>", "&", "|", ".":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeDeclarationHeader(ctx context.Context, source string, start, end int) (string, bool, error) {
