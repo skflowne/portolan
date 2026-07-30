@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -84,15 +86,51 @@ func flattenCoreSymbols(symbols []core.SymbolNode) []core.Symbol {
 
 func TestDecodeHoverSignatureSeparatesQuickInfoFromDocumentation(t *testing.T) {
 	raw := json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"before\\n```typescript\\nfunction documented(): number\\n```\\nDocumentation body.\"}}")
-	got, err := decodeHoverSignature(raw)
+	got, err := decodeHoverSignature(raw, core.Symbol{Name: "documented", Kind: core.SymbolKindFunction})
 	if err != nil {
 		t.Fatalf("decodeHoverSignature: %v", err)
 	}
 	if got != "function documented(): number" {
 		t.Fatalf("signature = %q, want quick info without documentation", got)
 	}
-	if got, err := decodeHoverSignature(json.RawMessage(`null`)); err != nil || got != "" {
+	if got, err := decodeHoverSignature(json.RawMessage(`null`), core.Symbol{Name: "documented", Kind: core.SymbolKindFunction}); err != nil || got != "" {
 		t.Fatalf("null hover = (%q, %v), want unavailable signature", got, err)
+	}
+}
+
+func TestDecodeHoverSignatureNormalizesPinnedTsgoDisplays(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "hover_signatures.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		Name   string          `json:"name"`
+		Symbol core.Symbol     `json:"symbol"`
+		Result json.RawMessage `json:"result"`
+		Want   string          `json:"want"`
+	}
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.Name, func(t *testing.T) {
+			got, err := decodeHoverSignature(fixture.Result, fixture.Symbol)
+			if err != nil {
+				t.Fatalf("decodeHoverSignature: %v", err)
+			}
+			if got != fixture.Want {
+				t.Fatalf("signature = %q, want %q", got, fixture.Want)
+			}
+		})
+	}
+}
+
+func TestDecodeHoverSignatureRejectsMalformedResults(t *testing.T) {
+	symbol := core.Symbol{Name: "area", Kind: core.SymbolKindMethod}
+	for _, raw := range []string{"{", `{"contents":42}`, "{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\n(method) Circle.area(): number\"}}"} {
+		if got, err := decodeHoverSignature(json.RawMessage(raw), symbol); err == nil || got != "" {
+			t.Errorf("decodeHoverSignature(%s) = (%q, %v), want error", raw, got, err)
+		}
 	}
 }
 
@@ -106,7 +144,7 @@ func TestSignatureAndDocumentSymbolDetailRemainDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeDocumentSymbols: %v", err)
 	}
-	plans := []signaturePlan{{position: symbols[0].SelRange.Start}}
+	plans := []signaturePlan{{position: symbols[0].SelRange.Start, symbol: symbols[0].Symbol}}
 	signatures, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, func(context.Context, string, any) (json.RawMessage, error) {
 		return json.RawMessage("{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\nfunction documented(): number\\n```\"}}"), nil
 	}, decodeHoverSignature)
@@ -123,23 +161,25 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 	source := "interface I {\n  (value: string): number;\n}\n" +
 		"const nested = (fn = () => 1) => fn();\n"
 	tests := []struct {
-		name   string
-		symbol core.Symbol
-		want   signaturePlan
+		name         string
+		symbol       core.Symbol
+		wantPosition core.Position
+		wantDirect   string
 	}{
 		{
 			name: "bodyless call signature",
 			symbol: core.Symbol{Name: "()", Kind: "method", Range: core.Range{
 				Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 26},
 			}, SelRange: core.Range{Start: core.Position{Line: 1, Character: 2}, End: core.Position{Line: 1, Character: 2}}},
-			want: signaturePlan{position: core.Position{Line: 1, Character: 2}, direct: "(value: string): number"},
+			wantPosition: core.Position{Line: 1, Character: 2},
+			wantDirect:   "(value: string): number",
 		},
 		{
 			name: "outer arrow after nested default",
 			symbol: core.Symbol{Name: "callback() callback", Kind: "function", Range: core.Range{
 				Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 38},
 			}, SelRange: core.Range{Start: core.Position{Line: 3, Character: 15}, End: core.Position{Line: 3, Character: 15}}},
-			want: signaturePlan{position: core.Position{Line: 3, Character: 30}},
+			wantPosition: core.Position{Line: 3, Character: 30},
 		},
 	}
 	for _, tc := range tests {
@@ -148,10 +188,26 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 			if err != nil {
 				t.Fatalf("planSignature: %v", err)
 			}
-			if got != tc.want {
-				t.Fatalf("plan = %+v, want %+v", got, tc.want)
+			if got.position != tc.wantPosition || got.direct != tc.wantDirect || got.symbol != tc.symbol {
+				t.Fatalf("plan = %+v, want position=%+v direct=%q and original symbol", got, tc.wantPosition, tc.wantDirect)
 			}
 		})
+	}
+}
+
+func TestRequestSignaturesMissingHoverStaysEmpty(t *testing.T) {
+	plans := []signaturePlan{{
+		position: core.Position{Line: 4, Character: 2},
+		symbol:   core.Symbol{Name: "missing", Kind: core.SymbolKindFunction},
+	}}
+	signatures, err := requestSignatures(context.Background(), "file:///repo/a.ts", plans, func(context.Context, string, any) (json.RawMessage, error) {
+		return json.RawMessage(`null`), nil
+	}, decodeHoverSignature)
+	if err != nil {
+		t.Fatalf("requestSignatures: %v", err)
+	}
+	if len(signatures) != 1 || signatures[0] != "" {
+		t.Fatalf("signatures = %#v, want one unavailable signature", signatures)
 	}
 }
 
@@ -223,7 +279,7 @@ func TestRequestSignaturesReturnsBeforeLateDecode(t *testing.T) {
 		}
 	}()
 
-	decode := func(json.RawMessage) (string, error) {
+	decode := func(json.RawMessage, core.Symbol) (string, error) {
 		close(entered)
 		defer close(exited)
 		<-release
