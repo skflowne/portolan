@@ -48,18 +48,18 @@ func TestDocumentSymbolAdapterConvertsPinnedTsgoHierarchy(t *testing.T) {
 		t.Fatalf("class hierarchy = %+v", nodes[1])
 	}
 	wantMembers := []struct {
-		name     string
-		kind     core.SymbolKind
-		rangeEnd core.Position
-		selRange core.Range
+		name      string
+		kind      core.SymbolKind
+		fullRange core.Range
+		selRange  core.Range
 	}{
-		{"constructor", core.SymbolKindConstructor, core.Position{Line: 7, Character: 48}, core.Range{Start: core.Position{Line: 7, Character: 2}, End: core.Position{Line: 7, Character: 2}}},
-		{"radius", core.SymbolKindProperty, core.Position{Line: 7, Character: 44}, core.Range{Start: core.Position{Line: 7, Character: 30}, End: core.Position{Line: 7, Character: 36}}},
-		{"area", core.SymbolKindMethod, core.Position{Line: 11, Character: 3}, core.Range{Start: core.Position{Line: 9, Character: 2}, End: core.Position{Line: 9, Character: 6}}},
+		{"constructor", core.SymbolKindConstructor, core.Range{Start: core.Position{Line: 7, Character: 2}, End: core.Position{Line: 7, Character: 48}}, core.Range{Start: core.Position{Line: 7, Character: 2}, End: core.Position{Line: 7, Character: 2}}},
+		{"radius", core.SymbolKindProperty, core.Range{Start: core.Position{Line: 7, Character: 14}, End: core.Position{Line: 7, Character: 44}}, core.Range{Start: core.Position{Line: 7, Character: 30}, End: core.Position{Line: 7, Character: 36}}},
+		{"area", core.SymbolKindMethod, core.Range{Start: core.Position{Line: 9, Character: 2}, End: core.Position{Line: 11, Character: 3}}, core.Range{Start: core.Position{Line: 9, Character: 2}, End: core.Position{Line: 9, Character: 6}}},
 	}
 	for i, want := range wantMembers {
 		member := nodes[1].Children[i]
-		if member.Name != want.name || member.Kind != want.kind || member.File != "/repo/shapes.ts" || member.Range.End != want.rangeEnd || member.SelRange != want.selRange {
+		if member.Name != want.name || member.Kind != want.kind || member.File != "/repo/shapes.ts" || member.Range != want.fullRange || member.SelRange != want.selRange {
 			t.Errorf("member %d = %+v, want %s/%s with canonical file and ranges", i, member, want.name, want.kind)
 		}
 	}
