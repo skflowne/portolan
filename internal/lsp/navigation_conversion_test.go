@@ -3,6 +3,8 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,6 +26,80 @@ func TestDocumentSymbolAdapterNormalizesHierarchyKindAndDetail(t *testing.T) {
 	}
 	if nodes[0].Signature != "" || nodes[0].Children[0].Signature != "" {
 		t.Fatalf("wire symbols acquired non-authoritative signatures: %+v", nodes)
+	}
+}
+
+func TestDocumentSymbolAdapterConvertsPinnedTsgoHierarchy(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "document_symbols.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := decodeDocumentSymbols(context.Background(), raw, "/repo/shapes.ts")
+	if err != nil {
+		t.Fatalf("decodeDocumentSymbols: %v", err)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("nodes = %+v, want four roots", nodes)
+	}
+	if nodes[0].Name != "Callable" || nodes[0].Kind != core.SymbolKindInterface || nodes[0].Detail != "interface detail" || len(nodes[0].Children) != 1 || nodes[0].Children[0].Name != "()" || nodes[0].Children[0].Kind != core.SymbolKindMethod {
+		t.Fatalf("interface hierarchy = %+v", nodes[0])
+	}
+	if nodes[1].Name != "Circle" || nodes[1].Kind != core.SymbolKindClass || len(nodes[1].Children) != 3 {
+		t.Fatalf("class hierarchy = %+v", nodes[1])
+	}
+	wantMembers := []struct {
+		name string
+		kind core.SymbolKind
+	}{{"constructor", core.SymbolKindConstructor}, {"radius", core.SymbolKindProperty}, {"area", core.SymbolKindMethod}}
+	for i, want := range wantMembers {
+		member := nodes[1].Children[i]
+		if member.Name != want.name || member.Kind != want.kind || member.File != "/repo/shapes.ts" {
+			t.Errorf("member %d = %+v, want %s/%s in canonical file", i, member, want.name, want.kind)
+		}
+	}
+	if nodes[2].Name != "totalArea" || nodes[2].Kind != core.SymbolKindFunction || len(nodes[2].Children) != 1 || nodes[2].Children[0].Name != "shapes.reduce() callback" || nodes[2].Children[0].Kind != core.SymbolKindFunction {
+		t.Fatalf("function hierarchy = %+v", nodes[2])
+	}
+	if nodes[3].Kind != core.SymbolKindUnknown {
+		t.Fatalf("unknown kind = %q, want %q", nodes[3].Kind, core.SymbolKindUnknown)
+	}
+	for _, node := range nodes {
+		if node.File != "/repo/shapes.ts" || node.Signature != "" {
+			t.Errorf("root canonical fields = %+v", node.Symbol)
+		}
+	}
+}
+
+func TestProtocolAdaptersNormalizeEmptyAndRejectMalformedResults(t *testing.T) {
+	for _, raw := range []string{"null", "[]"} {
+		if nodes, err := decodeDocumentSymbols(context.Background(), json.RawMessage(raw), "/repo/a.ts"); err != nil || nodes != nil {
+			t.Errorf("decodeDocumentSymbols(%s) = (%+v, %v), want honest empty", raw, nodes, err)
+		}
+		if locations, err := decodeLocations(context.Background(), json.RawMessage(raw)); err != nil || locations != nil {
+			t.Errorf("decodeLocations(%s) = (%+v, %v), want honest empty", raw, locations, err)
+		}
+	}
+	for _, raw := range []string{"{", `"wrong shape"`} {
+		if nodes, err := decodeDocumentSymbols(context.Background(), json.RawMessage(raw), "/repo/a.ts"); err == nil || nodes != nil {
+			t.Errorf("decodeDocumentSymbols(%s) = (%+v, %v), want error without partial output", raw, nodes, err)
+		}
+		if locations, err := decodeLocations(context.Background(), json.RawMessage(raw)); err == nil || locations != nil {
+			t.Errorf("decodeLocations(%s) = (%+v, %v), want error without partial output", raw, locations, err)
+		}
+	}
+}
+
+func TestLocationAdapterConvertsLocationAndLocationLinkArray(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"uri":"file:///repo/a.ts","range":{"start":{"line":1,"character":2},"end":{"line":1,"character":3}}},
+		{"targetUri":"file:///repo/b.ts","targetRange":{"start":{"line":4,"character":0},"end":{"line":5,"character":0}},"targetSelectionRange":{"start":{"line":4,"character":6},"end":{"line":4,"character":7}}}
+	]`)
+	locations, err := decodeLocations(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("decodeLocations: %v", err)
+	}
+	if len(locations) != 2 || locations[0].File != "/repo/a.ts" || locations[0].Range.Start != (core.Position{Line: 1, Character: 2}) || locations[1].File != "/repo/b.ts" || locations[1].Range.Start != (core.Position{Line: 4, Character: 6}) {
+		t.Fatalf("locations = %+v", locations)
 	}
 }
 
