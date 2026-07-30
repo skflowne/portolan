@@ -94,11 +94,17 @@ type hoverDecoder func(json.RawMessage) (string, error)
 
 func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, request requestFunc, decode hoverDecoder) ([]string, error) {
 	signatures := make([]string, len(plans))
+	positions := make([]lspPosition, len(plans))
 	var indexes []int
 	for i, plan := range plans {
 		if plan.direct != "" {
 			signatures[i] = plan.direct
 		} else {
+			position, err := toLSPPosition(plan.position)
+			if err != nil {
+				return nil, fmt.Errorf("lsp: invalid hover position: %w", err)
+			}
+			positions[i] = position
 			indexes = append(indexes, i)
 		}
 	}
@@ -121,10 +127,9 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 				if workCtx.Err() != nil {
 					return
 				}
-				plan := plans[index]
 				raw, err := request(workCtx, "textDocument/hover", textDocumentPositionParams{
 					TextDocument: textDocumentIdentifier{URI: uri},
-					Position:     lspPosition{Line: plan.position.Line, Character: plan.position.Character},
+					Position:     positions[index],
 				})
 				if err == nil {
 					var signature string
@@ -351,8 +356,8 @@ func isIdentifierByte(b byte) bool {
 }
 
 func byteOffset(source string, position core.Position) (int, error) {
-	if position.Line < 0 || position.Character < 0 {
-		return 0, fmt.Errorf("negative position %+v", position)
+	if err := position.Validate(); err != nil {
+		return 0, err
 	}
 	line, offset := 0, 0
 	for line < position.Line && offset < len(source) {

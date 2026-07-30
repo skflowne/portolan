@@ -111,6 +111,9 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	symbols := properties["symbols"].(map[string]any)
 	items := symbols["items"].(map[string]any)
 	symbolProperties := items["properties"].(map[string]any)
+	if _, exists := symbolProperties["children"]; exists {
+		t.Fatalf("flat outline schema advertises recursive hierarchy: %+v", symbolProperties["children"])
+	}
 	for field, wantDescription := range map[string]string{
 		"signature": "provider-authoritative",
 		"detail":    "independent of signature",

@@ -111,14 +111,42 @@ func (rl rawLocation) toLocation() (core.Location, bool, error) {
 	if err != nil {
 		return core.Location{}, false, err
 	}
-	return core.Location{File: path, Range: rng.toCoreRange()}, true, nil
+	convertedRange, err := rng.toCoreRange()
+	if err != nil {
+		return core.Location{}, false, fmt.Errorf("lsp: invalid location range: %w", err)
+	}
+	return core.Location{File: path, Range: convertedRange}, true, nil
 }
 
-func (r lspRange) toCoreRange() core.Range {
-	return core.Range{
-		Start: core.Position{Line: r.Start.Line, Character: r.Start.Character},
-		End:   core.Position{Line: r.End.Line, Character: r.End.Character},
+func (p lspPosition) toCorePosition() (core.Position, error) {
+	position := core.Position{Line: p.Line, Character: p.Character}
+	if err := position.Validate(); err != nil {
+		return core.Position{}, err
 	}
+	return position, nil
+}
+
+func toLSPPosition(position core.Position) (lspPosition, error) {
+	if err := position.Validate(); err != nil {
+		return lspPosition{}, err
+	}
+	return lspPosition{Line: position.Line, Character: position.Character}, nil
+}
+
+func (r lspRange) toCoreRange() (core.Range, error) {
+	start, err := r.Start.toCorePosition()
+	if err != nil {
+		return core.Range{}, err
+	}
+	end, err := r.End.toCorePosition()
+	if err != nil {
+		return core.Range{}, err
+	}
+	converted := core.Range{Start: start, End: end}
+	if err := converted.Validate(); err != nil {
+		return core.Range{}, err
+	}
+	return converted, nil
 }
 
 func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.SymbolNode, error) {
@@ -136,13 +164,24 @@ func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.
 			children = append(children, converted)
 		}
 	}
+	fullRange, err := s.Range.toCoreRange()
+	if err != nil {
+		return core.SymbolNode{}, fmt.Errorf("lsp: invalid range for symbol %q: %w", s.Name, err)
+	}
+	selectionRange, err := s.SelectionRange.toCoreRange()
+	if err != nil {
+		return core.SymbolNode{}, fmt.Errorf("lsp: invalid selection range for symbol %q: %w", s.Name, err)
+	}
+	if !fullRange.Contains(selectionRange) {
+		return core.SymbolNode{}, fmt.Errorf("lsp: selection range for symbol %q lies outside its full range", s.Name)
+	}
 	return core.SymbolNode{
 		Symbol: core.Symbol{
 			Name:     s.Name,
-			Kind:     core.SymbolKind(symbolKindName(s.Kind)),
+			Kind:     symbolKindName(s.Kind),
 			File:     file,
-			Range:    s.Range.toCoreRange(),
-			SelRange: s.SelectionRange.toCoreRange(),
+			Range:    fullRange,
+			SelRange: selectionRange,
 			Detail:   s.Detail,
 		},
 		Children: children,

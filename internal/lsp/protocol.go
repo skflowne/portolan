@@ -1,6 +1,10 @@
 package lsp
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/skflowne/portolan/internal/core"
+)
 
 // This file holds the minimal JSON-RPC / LSP wire types needed to drive
 // tsgo --lsp -stdio. Only the fields we actually read or write are declared —
@@ -178,38 +182,38 @@ type lspDocumentSymbol struct {
 
 // symbolKindNames maps the LSP SymbolKind enum (1..26) to the lower-cased
 // names core.Symbol.Kind expects.
-var symbolKindNames = map[int]string{
-	1:  "file",
-	2:  "module",
-	3:  "namespace",
-	4:  "package",
-	5:  "class",
-	6:  "method",
-	7:  "property",
-	8:  "field",
-	9:  "constructor",
-	10: "enum",
-	11: "interface",
-	12: "function",
-	13: "variable",
-	14: "constant",
-	15: "string",
-	16: "number",
-	17: "boolean",
-	18: "array",
-	19: "object",
-	20: "key",
-	21: "null",
-	22: "enummember",
-	23: "struct",
-	24: "event",
-	25: "operator",
-	26: "typeparameter",
+var symbolKindNames = map[int]core.SymbolKind{
+	1:  core.SymbolKindFile,
+	2:  core.SymbolKindModule,
+	3:  core.SymbolKindNamespace,
+	4:  core.SymbolKindPackage,
+	5:  core.SymbolKindClass,
+	6:  core.SymbolKindMethod,
+	7:  core.SymbolKindProperty,
+	8:  core.SymbolKindField,
+	9:  core.SymbolKindConstructor,
+	10: core.SymbolKindEnum,
+	11: core.SymbolKindInterface,
+	12: core.SymbolKindFunction,
+	13: core.SymbolKindVariable,
+	14: core.SymbolKindConstant,
+	15: core.SymbolKindString,
+	16: core.SymbolKindNumber,
+	17: core.SymbolKindBoolean,
+	18: core.SymbolKindArray,
+	19: core.SymbolKindObject,
+	20: core.SymbolKindKey,
+	21: core.SymbolKindNull,
+	22: core.SymbolKindEnumMember,
+	23: core.SymbolKindStruct,
+	24: core.SymbolKindEvent,
+	25: core.SymbolKindOperator,
+	26: core.SymbolKindTypeParameter,
 }
 
-func symbolKindName(k int) string {
+func symbolKindName(k int) core.SymbolKind {
 	if name, ok := symbolKindNames[k]; ok {
 		return name
 	}
-	return "unknown"
+	return core.SymbolKindUnknown
 }
