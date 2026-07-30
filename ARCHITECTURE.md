@@ -31,8 +31,8 @@ flowchart TB
         Ctl["Control socket<br/>(project-keyed)<br/>Phase 0 generation scaffold"]
         Tools["Tools layer<br/>find_definition · find_references · get_outline"]
         Gen["GenerationCounter<br/>freshness source"]
-        Prov{{"LanguageProvider<br/>(interface)"}}
-        LSP["lsp.Provider<br/>tsgo --lsp client"]
+        Prov{{"LanguageProvider<br/>(normalized navigation atoms)"}}
+        LSP["lsp.Provider<br/>tsgo --lsp adapter"]
         Path["pathnorm<br/>canonical host paths · strict file-URI codec"]
         Tel["telemetry<br/>bounded JSONL · opt-in OTLP/HTTP"]
     end
@@ -234,7 +234,7 @@ owners; the daemon and eval packages wire the implementations together.
 
 ```mermaid
 flowchart LR
-    core["internal/core<br/>contracts: LanguageProvider,<br/>Event/Logger, Config, StubProvider"]
+    core["internal/core<br/>navigation atoms · LanguageProvider<br/>Event/Logger · Config · StubProvider"]
     lsp["internal/lsp<br/>tsgo client"]
     path["internal/pathnorm<br/>canonical paths · file-URI codec<br/>(stdlib only)"]
     tel["internal/telemetry"]
@@ -273,6 +273,26 @@ The daemon wires the seam: `cmd/portoland` swaps the `StubProvider` for `lsp.New
 OTLP/HTTP only when a standard OTLP endpoint is explicitly configured. The lifecycle gate derives
 its expected default control-socket path through the same `internal/mcp` owner and follows that path
 through real-daemon readiness, command handling, duplicate ownership, and shutdown cleanup.
+
+### Normalized navigation ownership
+
+The three current navigation tools share one typed vocabulary rather than maintaining tool-specific
+field bags:
+
+| Concept | Canonical owner | Producers and adapters | Consumers |
+| --- | --- | --- | --- |
+| Zero-based UTF-16 position and half-open range | `core.Position` / `core.Range` | `internal/lsp` validates inbound and outbound LSP geometry through one conversion path | provider requests, locations, symbols, name resolution |
+| Canonical absolute-file location | `core.Location`; path identity and URI conversion remain in `internal/pathnorm` | LSP `Location` / `LocationLink` decoding converts file URIs before constructing a location | `find_definition`, `find_references` |
+| Name, normalized kind, file, full and selection ranges, optional authoritative signature, independent optional detail | non-recursive `core.Symbol` | LSP document-symbol and hover adapters remove numeric kinds, provider JSON, URIs, and Markdown wrappers | name resolution, signature enrichment, outline projection |
+| Symbol hierarchy | `core.SymbolNode` | recursive LSP document-symbol conversion | name resolution and outline traversal |
+| Flat outline nesting | `tools.OutlineSymbol` embeds `core.Symbol` and adds derived `Depth` | depth-first capped projection | `get_outline` only |
+| Freshness and result bounds | tool output envelopes | `GenerationCounter.Current()` and `Config.Cap()` | all three tool outputs and telemetry |
+
+`LanguageProvider.DocumentSymbols` now returns `[]core.SymbolNode`; its stub, LSP implementation,
+tool callers, fixtures, and Tier A contracts migrated together. `SymbolSignatures` accepts the
+non-recursive atoms and owns exact input-order association. The MCP SDK continues to derive schemas
+from tool types: the advertised `get_outline` item is flat and has no recursive `children` field.
+No custom MCP serializer or agent-facing renderer participates in normalization.
 
 ---
 
