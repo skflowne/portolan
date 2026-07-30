@@ -153,10 +153,11 @@ from the provider stage.
 - an array is examined in order and returns its first non-empty normalized item;
 - malformed JSON or content outside those accepted shapes returns an error.
 
-The extracted display is then normalized against the exact input symbol. Anchored tsgo method and
-property displays are accepted only when their kind and member name match, then lose the provider
-adornment and enclosing-type qualification. Matching constructor displays become
-`constructor(<parameters>)`; matching anonymous callback and default-function displays become their
+The extracted display is then normalized against the exact input symbol. Anchored tsgo method,
+property, and accessor displays are accepted only when their kind and member name match, then lose
+the provider adornment and any enclosing-type qualification. Qualified optional methods and
+unqualified object members retain their semantic declaration tail. Matching constructor displays
+become `constructor(<parameters>)`; matching anonymous callback and default-function displays become their
 parameter-and-return summary. A recognized tsgo wrapper that does not match the symbol is omitted
 rather than crossing the boundary with misleading provider presentation. Other unrecognized text is
 left unchanged; this is deliberately not a general TypeScript parser or alias normalizer.
