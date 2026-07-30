@@ -118,7 +118,7 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 
 func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 	writer := newRecordingWriteCloser()
-	text := "interface Callable {\n  (value: number): string;\n}\n"
+	text := "export class Box<T> extends Base<T> {\n  value!: T;\n}\n"
 	reads := 0
 	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
 		reads++
@@ -131,22 +131,22 @@ func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 	text = "const changed = 1;\n"
 
 	symbols := []core.Symbol{{
-		Name: "()",
-		Kind: "method",
+		Name: "Box",
+		Kind: core.SymbolKindClass,
 		Range: core.Range{
-			Start: core.Position{Line: 1, Character: 2},
-			End:   core.Position{Line: 1, Character: 26},
+			Start: core.Position{},
+			End:   core.Position{Line: 2, Character: 1},
 		},
 		SelRange: core.Range{
-			Start: core.Position{Line: 1, Character: 2},
-			End:   core.Position{Line: 1, Character: 2},
+			Start: core.Position{Character: 13},
+			End:   core.Position{Character: 16},
 		},
 	}}
 	got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", symbols)
 	if err != nil {
 		t.Fatalf("SymbolSignatures: %v", err)
 	}
-	if len(got) != 1 || got[0] != "(value: number): string" {
+	if len(got) != 1 || got[0] != "class Box<T> extends Base<T>" {
 		t.Fatalf("signatures = %q, want didOpen snapshot declaration", got)
 	}
 	if reads != 1 {

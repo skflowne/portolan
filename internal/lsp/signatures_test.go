@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -197,7 +198,7 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := planSignature(tc.symbol, source)
+			got, err := planSignature(context.Background(), tc.symbol, source)
 			if err != nil {
 				t.Fatalf("planSignature: %v", err)
 			}
@@ -205,6 +206,167 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 				t.Fatalf("plan = %+v, want position=%+v direct=%q and original symbol", got, tc.wantPosition, tc.wantDirect)
 			}
 		})
+	}
+}
+
+func TestExtractDeclarationHeader(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		symbol core.Symbol
+		want   string
+	}{
+		{
+			name:   "simple class excludes modifiers and body",
+			source: "export class Circle {\n  area(): number { return 1; }\n}",
+			symbol: core.Symbol{Name: "Circle", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "class Circle",
+		},
+		{
+			name: "multiline generic class with multiple heritage targets",
+			source: "export abstract class RedisSessionStore<T extends Session>\n" +
+				"  extends BaseStore<T>\n" +
+				"  implements SessionStore, Disposable\n" +
+				"{\n  value = 1;\n}",
+			symbol: core.Symbol{Name: "RedisSessionStore", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 5, Character: 1}}},
+			want:   "class RedisSessionStore<T extends Session> extends BaseStore<T> implements SessionStore, Disposable",
+		},
+		{
+			name:   "interface with multiple heritage targets",
+			source: "export interface CachedStore<T> extends SessionStore<T>, Disposable {\n  get(): T;\n}",
+			symbol: core.Symbol{Name: "CachedStore", Kind: core.SymbolKindInterface, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "interface CachedStore<T> extends SessionStore<T>, Disposable",
+		},
+		{
+			name:   "braced object generic constraint",
+			source: "class Registry<T extends { value: string; nested: { count: number } }> extends Base<T> {\n  body = true;\n}",
+			symbol: core.Symbol{Name: "Registry", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "class Registry<T extends { value: string; nested: { count: number } }> extends Base<T>",
+		},
+		{
+			name: "comments and literal braces are not body openers",
+			source: "export /* modifier */ class Tagged<T extends { open: \"{\"; close: `}`; }>\n" +
+				"/* clause */ extends Base<T> {\n  body = \"implements Wrong\";\n}",
+			symbol: core.Symbol{Name: "Tagged", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 3, Character: 1}}},
+			want:   "class Tagged<T extends { open: \"{\"; close: `}`; }> extends Base<T>",
+		},
+		{
+			name:   "UTF-16 range",
+			source: "😀 export class Café<T> extends Base<T> {}",
+			symbol: core.Symbol{Name: "Café", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{Character: 3}, End: core.Position{Character: 42}}},
+			want:   "class Café<T> extends Base<T>",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := extractDeclarationHeader(context.Background(), tc.source, tc.symbol)
+			if err != nil {
+				t.Fatalf("extractDeclarationHeader: %v", err)
+			}
+			if !ok || got != tc.want {
+				t.Fatalf("header = (%q, %v), want (%q, true)", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		symbol core.Symbol
+	}{
+		{
+			name:   "mismatched name",
+			source: "class Actual {}",
+			symbol: core.Symbol{Name: "Expected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 15}}},
+		},
+		{
+			name:   "mismatched kind",
+			source: "interface Shape {}",
+			symbol: core.Symbol{Name: "Shape", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 18}}},
+		},
+		{
+			name:   "anonymous default class",
+			source: "export default class {}",
+			symbol: core.Symbol{Name: "default", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 23}}},
+		},
+		{
+			name:   "missing body",
+			source: "declare class Ambient<T>;",
+			symbol: core.Symbol{Name: "Ambient", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 25}}},
+		},
+		{
+			name:   "unterminated literal",
+			source: "class Broken<T extends { value: \"unterminated } {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 50}}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := extractDeclarationHeader(context.Background(), tc.source, tc.symbol)
+			if err != nil {
+				t.Fatalf("extractDeclarationHeader: %v", err)
+			}
+			if ok || got != "" {
+				t.Fatalf("header = (%q, %v), want atomic fallback", got, ok)
+			}
+		})
+	}
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	c.remaining--
+	if c.remaining <= 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestExtractDeclarationHeaderCancelsDuringRangeMapping(t *testing.T) {
+	source := strings.Repeat("/* retained snapshot trivia */ ", 1024) + "class Target {}"
+	symbol := core.Symbol{
+		Name:  "Target",
+		Kind:  core.SymbolKindClass,
+		Range: core.Range{End: core.Position{Character: len(source)}},
+	}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), remaining: 4}
+	got, ok, err := extractDeclarationHeader(ctx, source, symbol)
+	if !errors.Is(err, context.Canceled) || ok || got != "" {
+		t.Fatalf("header = (%q, %v, %v), want atomic context cancellation", got, ok, err)
+	}
+}
+
+func TestPlanSignaturePrefersCompleteDeclarationHeader(t *testing.T) {
+	source := "export class Circle implements Shape { body = true; }"
+	symbol := core.Symbol{
+		Name:     "Circle",
+		Kind:     core.SymbolKindClass,
+		Range:    core.Range{End: core.Position{Character: len(source)}},
+		SelRange: core.Range{Start: core.Position{Character: 13}, End: core.Position{Character: 19}},
+	}
+	got, err := planSignature(context.Background(), symbol, source)
+	if err != nil {
+		t.Fatalf("planSignature: %v", err)
+	}
+	if got.direct != "class Circle implements Shape" {
+		t.Fatalf("direct signature = %q, want source header", got.direct)
+	}
+
+	symbol.Name = "Other"
+	got, err = planSignature(context.Background(), symbol, source)
+	if err != nil {
+		t.Fatalf("fallback planSignature: %v", err)
+	}
+	if got.direct != "" || got.position != symbol.SelRange.Start {
+		t.Fatalf("fallback plan = %+v, want unchanged hover position", got)
 	}
 }
 
