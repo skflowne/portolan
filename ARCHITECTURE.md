@@ -239,6 +239,7 @@ flowchart LR
     path["internal/pathnorm<br/>canonical paths · file-URI codec<br/>(stdlib only)"]
     tel["internal/telemetry"]
     tools["internal/tools"]
+    render["internal/tools/render<br/>typed compact-text primitives"]
     mcp["internal/mcp"]
     cmd["cmd/portoland<br/>(daemon main)"]
     eval["eval/tiera<br/>(Tier A gate)"]
@@ -250,6 +251,7 @@ flowchart LR
     tel --> core
     tools --> core
     tools --> path
+    render --> core
     mcp --> core
     mcp --> tools
     cmd --> core
@@ -279,9 +281,12 @@ through real-daemon readiness, command handling, duplicate ownership, and shutdo
 The three current navigation tools depend only on `core.LanguageProvider` and its typed canonical
 atoms. `internal/lsp` keeps JSON-RPC transport, operation orchestration, and concrete raw-result
 conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI identity owner.
-`get_outline` caps the document-symbol structure before requesting input-ordered signatures for
-retained symbols. The MCP SDK derives schemas from the resulting tool types, so no custom serializer
-or agent-facing renderer participates in normalization.
+`internal/tools/render` projects canonical positions, ranges, symbols, and locations into shared
+compact-text primitives without provider or MCP dependencies. It does not participate in current
+tool behavior until the tool-specific assemblers adopt it. `get_outline` caps the document-symbol
+structure before requesting input-ordered signatures for retained symbols. The MCP SDK continues to
+derive schemas from the resulting tool types, so no custom serializer or agent-facing renderer
+participates in normalization.
 
 [`PROVIDER_NORMALIZATION.md`](./PROVIDER_NORMALIZATION.md) is the canonical detailed contract for
 this boundary, including its complete inventory, ownership table, current null/empty/malformed/error
