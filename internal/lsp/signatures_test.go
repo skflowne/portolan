@@ -313,6 +313,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			source: "class Broken<T>> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 19}}},
 		},
+		{
+			name:   "incomplete heritage clause",
+			source: "class Broken extends {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 23}}},
+		},
+		{
+			name:   "incomplete generic constraint",
+			source: "class Broken<T extends> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
 	}
 
 	for _, tc := range tests {
