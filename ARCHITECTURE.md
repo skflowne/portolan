@@ -87,12 +87,16 @@ bound. The lock file remains in place so ownership release cannot race with path
 cap/paginate every tool · never deny grep · bounded waits everywhere · accept honest null results.
 For `get_outline`, `Signature` is a compact provider-authoritative semantic summary and `Detail`
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
-provider performs a concurrency-limited hover batch. Named symbols use their selection ranges;
-synthetic TypeScript symbols use source ranges only to locate an authoritative hover position, while
-bodyless call, construct, and index signatures use their complete declaration ranges. Source-range
-planning uses the exact text retained from `didOpen`, so it cannot mix LSP ranges with a newer disk
-snapshot before Phase 1 adds edit synchronization. If none of those sources yields an authoritative
-summary, the optional signature is omitted rather than reconstructed from a body.
+provider performs a concurrency-limited hover batch. Named TypeScript classes and interfaces use
+complete canonical ranges to extract matched,
+bodyless declaration headers with generics and `extends`/`implements` clauses; malformed, anonymous,
+mismatched, or unavailable headers fall back atomically to hover. Other named symbols use their
+selection ranges; synthetic TypeScript symbols use source ranges only to locate an authoritative
+hover position, while bodyless call, construct, and index signatures use their complete declaration
+ranges. Source-range planning uses the exact text retained from `didOpen`, so it cannot mix LSP
+ranges with a newer disk snapshot before Phase 1 adds edit synchronization. If none of those sources
+yields an authoritative summary, the optional signature is omitted rather than reconstructed from a
+body.
 
 ---
 
@@ -284,8 +288,10 @@ conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI 
 `internal/tools/render` projects canonical positions, ranges, symbols, and locations into shared
 compact-text primitives without provider or MCP dependencies. It does not participate in current
 tool behavior until the tool-specific assemblers adopt it. `get_outline` caps the document-symbol
-structure before requesting input-ordered signatures for retained symbols. The MCP SDK continues to
-derive schemas from the resulting tool types, so no custom serializer or agent-facing renderer
+structure before requesting input-ordered signatures for retained symbols. `internal/lsp` completes
+those canonical signatures: matched class/interface headers come from the retained `didOpen`
+snapshot, while malformed or unavailable headers and other semantic summaries use hover. The MCP
+SDK continues to derive schemas from the resulting tool types, so no custom serializer or agent-facing renderer
 participates in normalization.
 
 [`PROVIDER_NORMALIZATION.md`](./PROVIDER_NORMALIZATION.md) is the canonical detailed contract for

@@ -44,6 +44,7 @@ canonical paths, and hover presentation wrappers become compact plain strings be
 - `internal/lsp/provider.go` contains the production `Provider` implementation and the definition,
   references, and document-symbol request orchestration.
 - `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
+  `internal/lsp/declaration_headers.go` owns retained-source class/interface header extraction, and
   `internal/lsp/hover_conversion.go` owns hover decoding and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
   `lspDocumentSymbol`, `hoverResult`, `markupContent`, and the numeric symbol-kind map.
@@ -79,8 +80,8 @@ Raw conversion is tested independently of the subprocess transport:
   unsupported or unrepresentable URIs, and conversion cancellation.
 - `signatures_test.go` and pinned hover fixtures cover Markdown extraction, symbol-aware tsgo
   display normalization, separation of signature from document-symbol detail, missing and malformed
-  hover, source-backed synthetic signatures, input ordering, bounded concurrency, cancellation, and
-  first-error behavior.
+  hover, retained-source class/interface headers, source-backed synthetic signatures, input ordering,
+  bounded concurrency, cancellation, and first-error behavior.
 - `framing_conversion_test.go` covers cancellation precedence and the absence of partial converted
   output.
 
@@ -168,12 +169,18 @@ fence crosses the normalization boundary. An honest null/empty hover leaves the 
 canonical signature empty; it does not remove the symbol.
 
 `SymbolSignatures` returns one string per input symbol in input order. Empty input returns a
-non-nil empty slice. Some synthetic bodyless declarations are summarized directly from the exact
-source snapshot retained by `didOpen`; other entries use hover. Hover work is capped at eight
-concurrent requests. Planning or retained-source errors return before hover dispatch. After the
-hover batch starts, the first request or decoding error cancels its sibling work; caller cancellation
-also stops the batch. Every error path returns no signature slice. The tools layer also rejects a
-successful result whose length differs from the retained symbol count.
+non-nil empty slice. Named classes and interfaces prefer a complete declaration header extracted
+from their canonical range in the exact source snapshot retained by `didOpen`. The extractor matches
+the symbol kind and name, removes preceding modifiers and comment trivia, collapses syntactic
+whitespace, preserves generic and `extends`/`implements` text, and stops before the outer body. It
+tracks nested delimiters plus comments and literals so their braces cannot become the body opener.
+Malformed, anonymous, mismatched, or otherwise unrecognized headers remain on the existing hover
+path; extraction never returns a partial source header. Some synthetic bodyless declarations are
+also summarized directly from the retained snapshot, while other entries use hover. Hover work is
+capped at eight concurrent requests. Planning or retained-source errors return before hover dispatch.
+After the hover batch starts, the first request or decoding error cancels its sibling work; caller
+cancellation also stops the batch. Every error path returns no signature slice. The tools layer also
+rejects a successful result whose length differs from the retained symbol count.
 
 ## Two-stage bounded structural retrieval
 

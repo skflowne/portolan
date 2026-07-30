@@ -36,13 +36,13 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 		{
 			file: "member-signatures.ts",
 			want: map[string]string{
-				"Box@0":       "class Box<T>",
+				"Box@0":       "class Box<T> extends Array<T> implements Iterable<T>",
 				"value@1":     "value: T",
 				"size@5":      "size: number",
 				"members@10":  "const members: {\n    method(x: number): number;\n    prop: number;\n}",
 				"method@10":   "method(x: number): number",
 				"prop@10":     "prop: number",
-				"Weird@12":    "interface Weird",
+				"Weird@12":    "interface Weird extends Readonly<Record<string, unknown>>, Iterable<unknown>",
 				"optional@13": "optional?(): void",
 			},
 		},
