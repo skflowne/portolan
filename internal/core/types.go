@@ -1,6 +1,6 @@
 // Package core defines the shared contracts for the portolan daemon:
-// the LanguageProvider interface, the LSP-style position/location types, the
-// tool result envelopes (which always carry freshness), telemetry, and config.
+// the LanguageProvider interface, normalized navigation atoms and hierarchy,
+// freshness, telemetry, and config.
 //
 // Everything else in the daemon is built against this package. It has no
 // dependencies on the other internal packages, so it can be the stable center
@@ -146,8 +146,8 @@ type LanguageProvider interface {
 	// includeDeclaration is true the declaration itself is included.
 	References(ctx context.Context, file string, pos Position, includeDeclaration bool) ([]Location, error)
 
-	// DocumentSymbols returns the outline of file as a (possibly nested) symbol
-	// tree. Used both for the get_outline tool and for name→position resolution.
+	// DocumentSymbols returns the outline of file as a SymbolNode tree. Used both
+	// for the get_outline tool and for name→position resolution.
 	DocumentSymbols(ctx context.Context, file string) ([]SymbolNode, error)
 
 	// SymbolSignatures returns one signature for each symbol, in input order.
