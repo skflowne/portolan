@@ -15,14 +15,14 @@ func isJSONNull(raw json.RawMessage) bool {
 	return string(raw) == "null"
 }
 
-func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.Symbol, error) {
+func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string) ([]core.SymbolNode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if isJSONNull(raw) {
 		return nil, nil
 	}
-	return runFiniteWork(ctx, nil, func() ([]core.Symbol, error) {
+	return runFiniteWork(ctx, nil, func() ([]core.SymbolNode, error) {
 		var syms []lspDocumentSymbol
 		if err := json.Unmarshal(raw, &syms); err != nil {
 			return nil, fmt.Errorf("lsp: decoding documentSymbol result: %w", err)
@@ -31,7 +31,7 @@ func decodeDocumentSymbols(ctx context.Context, raw json.RawMessage, file string
 			return nil, nil
 		}
 
-		out := make([]core.Symbol, 0, len(syms))
+		out := make([]core.SymbolNode, 0, len(syms))
 		for _, symbol := range syms {
 			converted, err := symbol.toCoreSymbol(ctx, file)
 			if err != nil {
@@ -121,28 +121,30 @@ func (r lspRange) toCoreRange() core.Range {
 	}
 }
 
-func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.Symbol, error) {
+func (s lspDocumentSymbol) toCoreSymbol(ctx context.Context, file string) (core.SymbolNode, error) {
 	if err := ctx.Err(); err != nil {
-		return core.Symbol{}, err
+		return core.SymbolNode{}, err
 	}
-	var children []core.Symbol
+	var children []core.SymbolNode
 	if len(s.Children) > 0 {
-		children = make([]core.Symbol, 0, len(s.Children))
+		children = make([]core.SymbolNode, 0, len(s.Children))
 		for _, child := range s.Children {
 			converted, err := child.toCoreSymbol(ctx, file)
 			if err != nil {
-				return core.Symbol{}, err
+				return core.SymbolNode{}, err
 			}
 			children = append(children, converted)
 		}
 	}
-	return core.Symbol{
-		Name:     s.Name,
-		Kind:     core.SymbolKind(symbolKindName(s.Kind)),
-		File:     file,
-		Range:    s.Range.toCoreRange(),
-		SelRange: s.SelectionRange.toCoreRange(),
-		Detail:   s.Detail,
+	return core.SymbolNode{
+		Symbol: core.Symbol{
+			Name:     s.Name,
+			Kind:     core.SymbolKind(symbolKindName(s.Kind)),
+			File:     file,
+			Range:    s.Range.toCoreRange(),
+			SelRange: s.SelectionRange.toCoreRange(),
+			Detail:   s.Detail,
+		},
 		Children: children,
 	}, nil
 }

@@ -12,20 +12,11 @@ type GetOutlineInput struct {
 	File string `json:"file" jsonschema:"absolute path of the source file to outline"`
 }
 
-// OutlineSymbol is one flattened entry in a get_outline result. It carries
-// the same fields as core.Symbol except Children: the tree is flattened
-// depth-first (parent immediately followed by its children) and Depth
-// records nesting level (0 = top-level) so callers can reconstruct
-// indentation without an unbounded, cap-defeating nested shape.
+// OutlineSymbol projects one canonical symbol into a bounded flat outline.
+// Depth is derived from SymbolNode hierarchy and is not part of symbol identity.
 type OutlineSymbol struct {
-	Name      string          `json:"name"`
-	Kind      core.SymbolKind `json:"kind"`
-	File      string          `json:"file"`
-	Range     core.Range      `json:"range"`
-	SelRange  core.Range      `json:"selRange"`
-	Signature string          `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
-	Detail    string          `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
-	Depth     int             `json:"depth"`
+	core.Symbol
+	Depth int `json:"depth"`
 }
 
 // GetOutlineOutput is the output schema for get_outline.
@@ -55,7 +46,7 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = failure.message
 			return
 		}
-		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Symbol, error) {
+		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.SymbolNode, error) {
 			return t.Provider.DocumentSymbols(ctx, file)
 		})
 		if err != nil {
@@ -114,7 +105,7 @@ type flattenedSymbols struct {
 
 // flattenSymbols walks symbols depth-first and stops once it can prove the
 // configured result cap is truncated.
-func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) (flattenedSymbols, error) {
+func flattenSymbols(ctx context.Context, symbols []core.SymbolNode, cap int) (flattenedSymbols, error) {
 	if err := ctx.Err(); err != nil {
 		return flattenedSymbols{}, err
 	}
@@ -122,8 +113,8 @@ func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) (flatte
 		outline:   make([]OutlineSymbol, 0, min(len(symbols), cap)),
 		originals: make([]core.Symbol, 0, min(len(symbols), cap)),
 	}
-	var walk func([]core.Symbol, int) (bool, error)
-	walk = func(syms []core.Symbol, depth int) (bool, error) {
+	var walk func([]core.SymbolNode, int) (bool, error)
+	walk = func(syms []core.SymbolNode, depth int) (bool, error) {
 		for i := range syms {
 			if err := ctx.Err(); err != nil {
 				return false, err
@@ -132,17 +123,8 @@ func flattenSymbols(ctx context.Context, symbols []core.Symbol, cap int) (flatte
 				return true, nil
 			}
 			s := syms[i]
-			flat.outline = append(flat.outline, OutlineSymbol{
-				Name:      s.Name,
-				Kind:      s.Kind,
-				File:      s.File,
-				Range:     s.Range,
-				SelRange:  s.SelRange,
-				Signature: s.Signature,
-				Detail:    s.Detail,
-				Depth:     depth,
-			})
-			flat.originals = append(flat.originals, s)
+			flat.outline = append(flat.outline, OutlineSymbol{Symbol: s.Symbol, Depth: depth})
+			flat.originals = append(flat.originals, s.Symbol)
 			if len(s.Children) > 0 {
 				truncated, err := walk(s.Children, depth+1)
 				if err != nil || truncated {

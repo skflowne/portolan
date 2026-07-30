@@ -366,9 +366,9 @@ func (p *contextRecordingProvider) References(ctx context.Context, file string, 
 	return []core.Location{{File: file}}, nil
 }
 
-func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
+func (p *contextRecordingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.SymbolNode, error) {
 	p.record(ctx)
-	return []core.Symbol{{Name: "Target", File: file}}, nil
+	return []core.SymbolNode{{Symbol: core.Symbol{Name: "Target", File: file}}}, nil
 }
 
 func (p *contextRecordingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {
@@ -407,16 +407,14 @@ func (p *cancelingResultProvider) References(_ context.Context, file string, _ c
 	return []core.Location{{File: file}}, nil
 }
 
-func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) ([]core.Symbol, error) {
+func (p *cancelingResultProvider) DocumentSymbols(_ context.Context, _ string) ([]core.SymbolNode, error) {
 	if p.cancelStage == "symbols" {
 		p.cancel()
 	}
-	return []core.Symbol{{
-		Name: "Container",
-		File: p.file,
-		Children: []core.Symbol{{
-			Name: "Target",
-			File: p.file,
+	return []core.SymbolNode{{
+		Symbol: core.Symbol{Name: "Container", File: p.file},
+		Children: []core.SymbolNode{{
+			Symbol: core.Symbol{Name: "Target", File: p.file},
 		}},
 	}}, nil
 }
@@ -477,11 +475,11 @@ func (p *blockingProvider) References(ctx context.Context, file string, _ core.P
 	return []core.Location{{File: file}}, nil
 }
 
-func (p *blockingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
+func (p *blockingProvider) DocumentSymbols(ctx context.Context, file string) ([]core.SymbolNode, error) {
 	if err := p.block(ctx, "symbols"); err != nil {
 		return nil, err
 	}
-	return []core.Symbol{{Name: "Target", File: file}}, nil
+	return []core.SymbolNode{{Symbol: core.Symbol{Name: "Target", File: file}}}, nil
 }
 
 func (p *blockingProvider) SymbolSignatures(ctx context.Context, _ string, symbols []core.Symbol) ([]string, error) {

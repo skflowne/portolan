@@ -286,7 +286,7 @@ func (p *Provider) References(ctx context.Context, file string, pos core.Positio
 	return decodeLocations(ctx, raw)
 }
 
-func (p *Provider) DocumentSymbols(ctx context.Context, file string) ([]core.Symbol, error) {
+func (p *Provider) DocumentSymbols(ctx context.Context, file string) ([]core.SymbolNode, error) {
 	absFile, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err

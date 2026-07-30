@@ -41,7 +41,7 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			out.Message = failure.message
 			return
 		}
-		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Symbol, error) {
+		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.SymbolNode, error) {
 			return t.Provider.DocumentSymbols(ctx, file)
 		})
 		if err != nil {

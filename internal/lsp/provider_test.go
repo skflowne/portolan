@@ -73,7 +73,7 @@ func TestDocumentSymbols(t *testing.T) {
 	var found *core.Symbol
 	for i := range syms {
 		if syms[i].Name == "greet" {
-			found = &syms[i]
+			found = &syms[i].Symbol
 			break
 		}
 	}

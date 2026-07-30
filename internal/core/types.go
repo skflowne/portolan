@@ -33,19 +33,26 @@ type Location struct {
 // human-readable) so tool output is legible without a numeric lookup table.
 type SymbolKind string
 
-// Symbol is one entry in a file outline. Signature is a compact,
-// provider-authoritative declaration or type summary; it may be empty when the
-// provider cannot produce one without including a body. Detail preserves the
-// provider's independent document-symbol detail.
+// Symbol is the canonical non-recursive description of a source symbol.
+// File is an absolute host-normalized path. Range is the complete declaration
+// span, while SelRange identifies the name used for navigation. Signature is a
+// compact provider-authoritative declaration or type summary and Detail is the
+// provider's independent document-symbol detail; either may be empty.
 type Symbol struct {
 	Name      string     `json:"name"`
 	Kind      SymbolKind `json:"kind"`
 	File      string     `json:"file"`
-	Range     Range      `json:"range"`    // full symbol range
-	SelRange  Range      `json:"selRange"` // the name/selection range (used for name→position resolution)
-	Signature string     `json:"signature,omitempty"`
-	Detail    string     `json:"detail,omitempty"`
-	Children  []Symbol   `json:"children,omitempty"`
+	Range     Range      `json:"range"`
+	SelRange  Range      `json:"selRange"`
+	Signature string     `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
+	Detail    string     `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
+}
+
+// SymbolNode owns outline hierarchy separately from canonical Symbol identity.
+// A symbol's nesting may change without changing the symbol atom itself.
+type SymbolNode struct {
+	Symbol
+	Children []SymbolNode `json:"children,omitempty"`
 }
 
 // Freshness is stamped on every tool result to identify the source generation
@@ -77,7 +84,7 @@ type LanguageProvider interface {
 
 	// DocumentSymbols returns the outline of file as a (possibly nested) symbol
 	// tree. Used both for the get_outline tool and for name→position resolution.
-	DocumentSymbols(ctx context.Context, file string) ([]Symbol, error)
+	DocumentSymbols(ctx context.Context, file string) ([]SymbolNode, error)
 
 	// SymbolSignatures returns one signature for each symbol, in input order.
 	// An empty signature means the provider has no authoritative summary. The

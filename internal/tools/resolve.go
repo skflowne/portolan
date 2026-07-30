@@ -16,15 +16,15 @@ import (
 // core.Symbol's doc comment — this is what LSP definition/references
 // requests expect, not the full symbol Range) and whether any match was
 // found at all.
-func resolveSymbolPosition(ctx context.Context, symbols []core.Symbol, name string, line *int) (core.Position, bool, error) {
+func resolveSymbolPosition(ctx context.Context, symbols []core.SymbolNode, name string, line *int) (core.Position, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return core.Position{}, false, err
 	}
-	var first *core.Symbol
-	var lineMatch *core.Symbol
+	var first *core.SymbolNode
+	var lineMatch *core.SymbolNode
 
-	var walk func([]core.Symbol) (bool, error)
-	walk = func(syms []core.Symbol) (bool, error) {
+	var walk func([]core.SymbolNode) (bool, error)
+	walk = func(syms []core.SymbolNode) (bool, error) {
 		for i := range syms {
 			if err := ctx.Err(); err != nil {
 				return false, err
