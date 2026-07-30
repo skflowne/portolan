@@ -7,7 +7,10 @@
 // that the LSP provider, telemetry spine, MCP server, and tools all depend on.
 package core
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Position is a zero-based LSP-style position. Character is a UTF-16 code-unit
 // offset (tsgo reports positionEncoding utf-16).
@@ -16,10 +19,42 @@ type Position struct {
 	Character int `json:"character"`
 }
 
-// Range is a half-open [Start, End) span, LSP-style.
+// Validate rejects coordinates outside the normalized position domain.
+func (p Position) Validate() error {
+	if p.Line < 0 || p.Character < 0 {
+		return fmt.Errorf("negative position %+v", p)
+	}
+	return nil
+}
+
+// Range is a half-open [Start, End) span, LSP-style. Zero-width and multiline
+// ranges are valid.
 type Range struct {
 	Start Position `json:"start"`
 	End   Position `json:"end"`
+}
+
+// Validate rejects invalid positions and ranges whose end precedes their start.
+func (r Range) Validate() error {
+	if err := r.Start.Validate(); err != nil {
+		return fmt.Errorf("range start: %w", err)
+	}
+	if err := r.End.Validate(); err != nil {
+		return fmt.Errorf("range end: %w", err)
+	}
+	if r.End.Line < r.Start.Line || r.End.Line == r.Start.Line && r.End.Character < r.Start.Character {
+		return fmt.Errorf("range end %+v precedes start %+v", r.End, r.Start)
+	}
+	return nil
+}
+
+// Contains reports whether inner lies entirely within r.
+func (r Range) Contains(inner Range) bool {
+	return !positionBefore(inner.Start, r.Start) && !positionBefore(r.End, inner.End)
+}
+
+func positionBefore(a, b Position) bool {
+	return a.Line < b.Line || a.Line == b.Line && a.Character < b.Character
 }
 
 // Location is a resolved position in a file. File is an absolute path,
@@ -29,9 +64,38 @@ type Location struct {
 	Range Range  `json:"range"`
 }
 
-// SymbolKind mirrors the LSP SymbolKind names we care about (lower-cased,
-// human-readable) so tool output is legible without a numeric lookup table.
+// SymbolKind is a provider-neutral, human-readable symbol classification.
 type SymbolKind string
+
+const (
+	SymbolKindUnknown       SymbolKind = "unknown"
+	SymbolKindFile          SymbolKind = "file"
+	SymbolKindModule        SymbolKind = "module"
+	SymbolKindNamespace     SymbolKind = "namespace"
+	SymbolKindPackage       SymbolKind = "package"
+	SymbolKindClass         SymbolKind = "class"
+	SymbolKindMethod        SymbolKind = "method"
+	SymbolKindProperty      SymbolKind = "property"
+	SymbolKindField         SymbolKind = "field"
+	SymbolKindConstructor   SymbolKind = "constructor"
+	SymbolKindEnum          SymbolKind = "enum"
+	SymbolKindInterface     SymbolKind = "interface"
+	SymbolKindFunction      SymbolKind = "function"
+	SymbolKindVariable      SymbolKind = "variable"
+	SymbolKindConstant      SymbolKind = "constant"
+	SymbolKindString        SymbolKind = "string"
+	SymbolKindNumber        SymbolKind = "number"
+	SymbolKindBoolean       SymbolKind = "boolean"
+	SymbolKindArray         SymbolKind = "array"
+	SymbolKindObject        SymbolKind = "object"
+	SymbolKindKey           SymbolKind = "key"
+	SymbolKindNull          SymbolKind = "null"
+	SymbolKindEnumMember    SymbolKind = "enummember"
+	SymbolKindStruct        SymbolKind = "struct"
+	SymbolKindEvent         SymbolKind = "event"
+	SymbolKindOperator      SymbolKind = "operator"
+	SymbolKindTypeParameter SymbolKind = "typeparameter"
+)
 
 // Symbol is the canonical non-recursive description of a source symbol.
 // File is an absolute host-normalized path. Range is the complete declaration

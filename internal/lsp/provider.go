@@ -252,13 +252,17 @@ func (p *Provider) retryableOpenError(ctx context.Context, err error) bool {
 }
 
 func (p *Provider) Definition(ctx context.Context, file string, pos core.Position) ([]core.Location, error) {
+	position, err := toLSPPosition(pos)
+	if err != nil {
+		return nil, fmt.Errorf("lsp: invalid definition position: %w", err)
+	}
 	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
 	params := textDocumentPositionParams{
 		TextDocument: textDocumentIdentifier{URI: uri},
-		Position:     lspPosition{Line: pos.Line, Character: pos.Character},
+		Position:     position,
 	}
 	raw, err := p.transport.call(ctx, "textDocument/definition", params)
 	if err != nil {
@@ -268,6 +272,10 @@ func (p *Provider) Definition(ctx context.Context, file string, pos core.Positio
 }
 
 func (p *Provider) References(ctx context.Context, file string, pos core.Position, includeDeclaration bool) ([]core.Location, error) {
+	position, err := toLSPPosition(pos)
+	if err != nil {
+		return nil, fmt.Errorf("lsp: invalid reference position: %w", err)
+	}
 	_, uri, err := p.prepareOpen(ctx, file)
 	if err != nil {
 		return nil, err
@@ -275,7 +283,7 @@ func (p *Provider) References(ctx context.Context, file string, pos core.Positio
 	params := referenceParams{
 		textDocumentPositionParams: textDocumentPositionParams{
 			TextDocument: textDocumentIdentifier{URI: uri},
-			Position:     lspPosition{Line: pos.Line, Character: pos.Character},
+			Position:     position,
 		},
 		Context: referenceContext{IncludeDeclaration: includeDeclaration},
 	}
