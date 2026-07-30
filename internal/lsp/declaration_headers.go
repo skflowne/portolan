@@ -171,7 +171,11 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			continue
 		}
 		if keyword, ok := declarationKeywordAt(source, i, end); ok {
-			last = keyword
+			if last == "." {
+				last = "value"
+			} else {
+				last = keyword
+			}
 			i += len(keyword)
 			continue
 		}
