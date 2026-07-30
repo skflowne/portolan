@@ -47,8 +47,9 @@ canonical paths, and hover presentation wrappers become compact plain strings be
   conversion.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
   `lspDocumentSymbol`, `hoverResult`, `markupContent`, and the numeric symbol-kind map.
-- `internal/lsp/conversion.go` contains document-symbol, location, position, range, and URI-to-path
-  conversion.
+- `internal/lsp/conversion.go` contains document-symbol, location, position, and range conversion;
+  `internal/lsp/uri.go` contains the LSP-facing `pathFromURI` wrapper that delegates canonical
+  identity conversion to `internal/pathnorm` and qualifies conversion errors.
 - `internal/lsp/rpc.go`, `internal/lsp/transport.go`, and `internal/lsp/framing.go` own JSON-RPC
   request/response delivery and framing. They do not construct canonical navigation atoms.
 
@@ -156,9 +157,10 @@ corresponding canonical signature empty; it does not remove the symbol.
 `SymbolSignatures` returns one string per input symbol in input order. Empty input returns a
 non-nil empty slice. Some synthetic bodyless declarations are summarized directly from the exact
 source snapshot retained by `didOpen`; other entries use hover. Hover work is capped at eight
-concurrent requests. The first request, decoding, planning, source, or cancellation error cancels
-the batch and returns no signature slice. The tools layer also rejects a successful result whose
-length differs from the retained symbol count.
+concurrent requests. Planning or retained-source errors return before hover dispatch. After the
+hover batch starts, the first request or decoding error cancels its sibling work; caller cancellation
+also stops the batch. Every error path returns no signature slice. The tools layer also rejects a
+successful result whose length differs from the retained symbol count.
 
 ## Two-stage bounded structural retrieval
 
@@ -179,9 +181,11 @@ name to the canonical selection-range position before making their second provid
 All provider stages share the tools-owned operation context. Transport errors, provider errors,
 decoder errors, signature-batch errors, and cancellation are returned through `LanguageProvider`.
 The tools layer exposes them as a populated output `error` and explanatory `message`, emits its one
-telemetry event, and returns no Go error to the MCP handler. Honest null or empty provider results
-instead produce `found: false` with no output error. A successful provider result that arrives after
-operation cancellation is rejected before the tool accepts it.
+telemetry event, and returns no Go error to the MCP handler. An honest null or empty required
+structure/location stage produces `found: false` with no output error. Null or empty hover content
+only omits that symbol's optional signature, so an outline that retained symbols remains
+`found: true`. A successful provider result that arrives after operation cancellation is rejected
+before the tool accepts it.
 
 ## Deferred concerns
 
