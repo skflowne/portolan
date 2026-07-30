@@ -251,6 +251,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Tagged<T extends { open: \"{\"; close: `}`; }> extends Base<T>",
 		},
 		{
+			name:   "relational heritage expression",
+			source: "class Selected extends (a < b ? A : B) {}",
+			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+			want:   "class Selected extends (a < b ? A : B)",
+		},
+		{
 			name:   "UTF-16 range",
 			source: "😀 export class Café<T> extends Base<T> {}",
 			symbol: core.Symbol{Name: "Café", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{Character: 3}, End: core.Position{Character: 42}}},
@@ -302,6 +308,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			source: "class Broken<T extends { value: \"unterminated } {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 50}}},
 		},
+		{
+			name:   "unmatched generic closer",
+			source: "class Broken<T>> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 19}}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -337,7 +348,7 @@ func TestExtractDeclarationHeaderCancelsDuringRangeMapping(t *testing.T) {
 		Kind:  core.SymbolKindClass,
 		Range: core.Range{End: core.Position{Character: len(source)}},
 	}
-	ctx := &cancelAfterChecksContext{Context: context.Background(), remaining: 4}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), remaining: 5}
 	got, ok, err := extractDeclarationHeader(ctx, source, symbol)
 	if !errors.Is(err, context.Canceled) || ok || got != "" {
 		t.Fatalf("header = (%q, %v, %v), want atomic context cancellation", got, ok, err)
