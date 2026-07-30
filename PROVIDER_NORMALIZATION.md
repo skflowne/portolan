@@ -43,8 +43,8 @@ canonical paths, and hover presentation wrappers become compact plain strings be
   upper-layer tests. Its signature method returns the existing canonical signatures in input order.
 - `internal/lsp/provider.go` contains the production `Provider` implementation and the definition,
   references, and document-symbol request orchestration.
-- `internal/lsp/signatures.go` implements signature planning, bounded hover requests, and hover
-  conversion.
+- `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
+  `internal/lsp/hover_conversion.go` owns hover decoding and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
   `lspDocumentSymbol`, `hoverResult`, `markupContent`, and the numeric symbol-kind map.
 - `internal/lsp/conversion.go` contains document-symbol, location, position, and range conversion;
@@ -77,12 +77,15 @@ Raw conversion is tested independently of the subprocess transport:
   invalid position/range geometry.
 - `uri_test.go` covers `Location` and `LocationLink` URI normalization, target-selection fallback,
   unsupported or unrepresentable URIs, and conversion cancellation.
-- `signatures_test.go` covers hover normalization, separation of signature from document-symbol
-  detail, source-backed synthetic signatures, input ordering, bounded concurrency, cancellation,
-  and first-error behavior.
+- `signatures_test.go` and pinned hover fixtures cover Markdown extraction, symbol-aware tsgo
+  display normalization, separation of signature from document-symbol detail, missing and malformed
+  hover, source-backed synthetic signatures, input ordering, bounded concurrency, cancellation, and
+  first-error behavior.
 - `framing_conversion_test.go` covers cancellation precedence and the absence of partial converted
   output.
 
+Pinned raw document-symbol fixtures additionally cover interface, class, constructor, property,
+method, function, anonymous-callback hierarchy, unknown kinds, and complete canonical ranges.
 `provider_test.go` exercises document symbols, definitions, references, honest-null definitions,
 canonical escaped paths, and concurrent queries against the real pinned language server.
 `internal/tools` tests cover name resolution, caps, retained-symbol enrichment, honest-empty
@@ -144,15 +147,24 @@ from the provider stage.
 
 - absent or null contents become an empty signature;
 - an object with a non-empty `value` is trimmed; for `kind: "markdown"`, the first complete fenced
-  code block is extracted, or the trimmed full value is used when no complete fence exists;
+  code block is extracted, or the trimmed full value is used when no fence exists; an incomplete
+  fence is malformed and returns an error rather than leaking Markdown syntax;
 - a string is trimmed;
 - an array is examined in order and returns its first non-empty normalized item;
 - malformed JSON or content outside those accepted shapes returns an error.
 
+The extracted display is then normalized against the exact input symbol. Anchored tsgo method and
+property displays are accepted only when their kind and member name match, then lose the provider
+adornment and enclosing-type qualification. Matching constructor displays become
+`constructor(<parameters>)`; matching anonymous callback and default-function displays become their
+parameter-and-return summary. A recognized tsgo wrapper that does not match the symbol is omitted
+rather than crossing the boundary with misleading provider presentation. Other unrecognized text is
+left unchanged; this is deliberately not a general TypeScript parser or alias normalizer.
+
 The output is a plain signature string rather than an LSP `MarkupContent` or `MarkedString` wrapper.
-A complete fenced quick-info block loses its fence and surrounding documentation; an incomplete
-fence is currently returned intact as trimmed text. An honest null/empty hover leaves the
-corresponding canonical signature empty; it does not remove the symbol.
+A complete fenced quick-info block loses its fence and surrounding documentation, and no Markdown
+fence crosses the normalization boundary. An honest null/empty hover leaves the corresponding
+canonical signature empty; it does not remove the symbol.
 
 `SymbolSignatures` returns one string per input symbol in input order. Empty input returns a
 non-nil empty slice. Some synthetic bodyless declarations are summarized directly from the exact
@@ -207,8 +219,8 @@ This documentation inventory exposes two gaps without changing behavior:
   alternative flat `SymbolInformation[]` shape or other objects with omitted fields; Go zero values
   can pass current geometry validation. Unsupported-capability and alternate-shape policy remains
   deferred rather than adding negotiation or an adapter here.
-- Independent decoder tests cover normalized document-symbol structure and malformed geometry,
-  location variants and URI failures, and Markdown/null hover conversion. They do not directly pin
-  every uncanceled null/empty/malformed JSON branch or every accepted hover string/array form.
-  Expanding that coverage belongs in behavior-focused follow-up work, not this documentation-only
-  issue.
+- Independent decoder tests now pin uncanceled null/empty/malformed document-symbol and location
+  results plus accepted hover object/string forms. The legacy accepted hover-array form remains
+  covered only through its decoder implementation rather than a dedicated fixture; expanding that
+  legacy-shape matrix should follow demonstrated provider output rather than broadening this
+  tsgo-focused change.
