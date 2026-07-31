@@ -286,6 +286,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Selected extends constructors.new",
 		},
 		{
+			name:   "heritage expression with sparse array",
+			source: "class Derived extends choose([Base,, Base]) {}",
+			symbol: core.Symbol{Name: "Derived", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 46}}},
+			want:   "class Derived extends choose([Base,, Base])",
+		},
+		{
 			name:   "UTF-16 range",
 			source: "😀 export class Café<T> extends Base<T> {}",
 			symbol: core.Symbol{Name: "Café", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{Character: 3}, End: core.Position{Character: 42}}},
