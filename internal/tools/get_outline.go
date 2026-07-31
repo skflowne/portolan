@@ -19,7 +19,10 @@ type OutlineSymbol struct {
 	Depth int `json:"depth"`
 }
 
-// GetOutlineOutput is the output schema for get_outline.
+// GetOutlineOutput is the typed internal result of get_outline, not an
+// advertised schema: internal/mcp registers the tool with an untyped output
+// value, so a field added here reaches no caller until RenderOutline projects
+// it into the compact text response.
 type GetOutlineOutput struct {
 	// Found is true iff the file produced at least one symbol. An empty
 	// file (or one the provider has no symbols for) is an honest, non-error
