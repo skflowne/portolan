@@ -48,8 +48,9 @@ canonical paths, and hover presentation wrappers become compact plain strings be
   classification, trivia removal, and whitespace normalization; `internal/lsp/declaration_structure.go`
   owns every request-local validity transition, including operators, pending function arrows,
   generic purposes, conditional stages, class/interface heritage phases, operands, separators, and
-  closure; `internal/lsp/declaration_structure_scan.go` classifies and dispatches source tokens to
-  that owner, locates the outer-body boundary, and rejects slash-ambiguous headers; and
+  closure; `internal/lsp/declaration_structure_scan.go` classifies source tokens, communicates
+  lexical token starts while dispatching them to that owner, locates the outer-body boundary, and
+  rejects slash-ambiguous headers; and
   `internal/lsp/hover_conversion.go` owns hover decoding
   and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,

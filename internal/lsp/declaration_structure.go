@@ -95,7 +95,7 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 			return false
 		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
-		if !s.markValue() {
+		if !s.markValue(false) {
 			return false
 		}
 	}
@@ -109,12 +109,12 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 		s.current().last = "pendingArrow"
 		return true
 	}
-	return s.markValue()
+	return s.markValue(false)
 }
-
-func (s *declarationStructure) markValue() bool {
+func (s *declarationStructure) markValue(tokenStart bool) bool {
 	current := s.current()
-	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
+	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() ||
+		tokenStart && s.atRoot() && current.last == "value" {
 		return false
 	}
 	current.completeConditionalValue()
@@ -148,7 +148,7 @@ func (s *declarationStructure) markKeyword(keyword string) bool {
 		return false
 	}
 	if current.last == "." {
-		return s.markValue()
+		return s.markValue(false)
 	}
 	if s.atRoot() {
 		return s.acceptHeritageKeyword(keyword)
@@ -381,7 +381,7 @@ func (s *declarationStructure) closeGeneric() bool {
 		s.current().last = "value"
 		return true
 	}
-	return s.markValue()
+	return s.markValue(false)
 }
 
 func (s *declarationStructure) canOpenBody() bool {

@@ -112,6 +112,8 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		{name: "RepeatedIntersection", want: "class RepeatedIntersection<T extends any>"},
 		{name: "MixedUnionIntersection", want: "class MixedUnionIntersection<T extends any>"},
 		{name: "MixedIntersectionUnion", want: "class MixedIntersectionUnion<T extends any>"},
+		{name: "MissingInterfaceSeparator", want: "interface MissingInterfaceSeparator"},
+		{name: "MissingClassSeparator", want: "class MissingClassSeparator"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,6 +467,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "adjacent intersection and union operators",
 			source: "class Broken<T extends A & | B> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "missing interface heritage separator",
+			source: "interface Broken extends A B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 31}}},
+		},
+		{
+			name:   "missing class heritage separator",
+			source: "class Broken implements A B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
 		},
 		{
 			name:   "duplicate heritage separator",

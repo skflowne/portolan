@@ -12,3 +12,5 @@ class RepeatedUnion<T extends A | | B> {}
 class RepeatedIntersection<T extends A & & B> {}
 class MixedUnionIntersection<T extends A | & B> {}
 class MixedIntersectionUnion<T extends A & | B> {}
+interface MissingInterfaceSeparator extends A B {}
+class MissingClassSeparator implements A B {}
