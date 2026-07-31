@@ -62,15 +62,16 @@ func NewServer(t *tools.Tools) *sdk.Server {
 		Name: "get_outline",
 		Description: "Navigate the code graph (via the language server) to get a file's " +
 			"structural outline: every top-level and nested symbol (classes, functions, " +
-			"methods, fields, etc.) with its declaration as written in the source, enriched " +
-			"with the types the language server infers. Prefer this over reading a whole " +
+			"methods, fields, etc.) with a compact provider-authoritative declaration or type " +
+			"summary. This preserves source-backed declaration syntax where available while " +
+			"allowing normalized language-server summaries. Prefer this over reading a whole " +
 			"file when you only need to know what's in it and where.\n\n" +
 			"The reply is compact text. Line 1 is `file <path>`; line 2 is `ranges 0-based`, " +
 			"meaning every `[startLine:startCharacter-endLine:endCharacter]` that follows is " +
 			"a zero-based, half-open range over the symbol's complete declaration. A blank " +
 			"line closes the header; then one line per symbol, indented two spaces per " +
 			"nesting level, in the order the language server reports them; a symbol with no " +
-			"available declaration text falls back to its kind and name. Within that list a " +
+			"available summary falls back to its kind and name. Within that list a " +
 			"blank line precedes a top-level symbol that follows a nested one. After a final " +
 			"blank line the last line is `1 symbol; complete` or `N symbols; complete`, or " +
 			"`1 symbol; truncated: more symbols exist` or `N symbols; truncated: more symbols exist` " +
