@@ -22,7 +22,6 @@ type declarationContext struct {
 	last string
 	// Expression contexts treat an unmatched generic candidate as a relational operator.
 	tentativeGeneric bool
-	invalidSeparator bool
 }
 
 type declarationStructure struct {
@@ -43,10 +42,13 @@ func (s *declarationStructure) open(kind declarationContextKind, token string) {
 
 func (s *declarationStructure) close(kind declarationContextKind) bool {
 	for len(s.contexts) > 1 && s.current().kind == declarationGeneric && s.current().tentativeGeneric {
+		if !s.current().canClose() {
+			return false
+		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
 		s.current().last = "value"
 	}
-	if len(s.contexts) == 1 || s.current().kind != kind {
+	if len(s.contexts) == 1 || s.current().kind != kind || !s.current().canClose() {
 		return false
 	}
 	s.contexts = s.contexts[:len(s.contexts)-1]
@@ -73,21 +75,56 @@ func (s *declarationStructure) openGeneric() {
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
-	if (current.kind == declarationRoot || current.kind == declarationGeneric) && current.last == "," {
-		if current.tentativeGeneric {
-			current.invalidSeparator = true
-		} else {
-			return false
-		}
+	if current.requiresListOperand() && !current.hasListOperand() {
+		return false
 	}
 	current.last = ","
 	return true
 }
 
+func (c *declarationContext) requiresListOperand() bool {
+	switch c.kind {
+	case declarationRoot, declarationGeneric, declarationParen, declarationBrace:
+		return true
+	case declarationBracket:
+		return false
+	default:
+		return true
+	}
+}
+
+func (c *declarationContext) hasListOperand() bool {
+	return c.last != "," && !incompleteDeclarationToken(c.last)
+}
+
+func (c *declarationContext) canClose() bool {
+	if c.last == "," {
+		return true
+	}
+	if c.last == contextOpeningToken(c.kind) {
+		return c.kind != declarationGeneric
+	}
+	return !incompleteDeclarationToken(c.last)
+}
+
+func contextOpeningToken(kind declarationContextKind) string {
+	switch kind {
+	case declarationGeneric:
+		return "<"
+	case declarationParen:
+		return "("
+	case declarationBracket:
+		return "["
+	case declarationBrace:
+		return "{"
+	default:
+		return ""
+	}
+}
+
 func (s *declarationStructure) closeGeneric() bool {
 	current := s.current()
-	if current.kind != declarationGeneric || current.invalidSeparator ||
-		current.last != "," && incompleteDeclarationToken(current.last) {
+	if current.kind != declarationGeneric || !current.canClose() {
 		return false
 	}
 	s.contexts = s.contexts[:len(s.contexts)-1]
