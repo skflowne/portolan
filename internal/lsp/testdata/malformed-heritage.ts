@@ -1,2 +1,2 @@
 class Base {}
-class Broken extends Base,, Other {}
+class Broken extends Base<A,, B> {}
