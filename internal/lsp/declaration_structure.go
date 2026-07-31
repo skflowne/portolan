@@ -134,6 +134,9 @@ func (c *declarationContext) reduceCompletedConditionals() {
 
 func (s *declarationStructure) markKeyword(token declarationToken) bool {
 	current := s.current()
+	if token == declarationIn && current.kind == declarationBrace && current.last.metadata().requiresOperand {
+		return s.markValue(declarationValue)
+	}
 	if current.last == declarationPendingArrow {
 		return false
 	}
