@@ -44,7 +44,17 @@ canonical paths, and hover presentation wrappers become compact plain strings be
 - `internal/lsp/provider.go` contains the production `Provider` implementation and the definition,
   references, and document-symbol request orchestration.
 - `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
-  `internal/lsp/hover_conversion.go` owns hover decoding and tsgo display normalization.
+  `internal/lsp/declaration_headers.go` owns retained-range and name validation plus lexical-span
+  classification, trivia removal, and whitespace normalization; `internal/lsp/declaration_tokens.go`
+  owns recognized token metadata, including lexical boundaries, operand requirements, and terminal
+  completeness; `internal/lsp/declaration_structure.go` and
+  `internal/lsp/declaration_structure_transition.go` own every request-local validity transition,
+  including operators, pending function arrows, generic purposes, conditional stages,
+  class/interface heritage phases, operands, separators, and closure;
+  `internal/lsp/declaration_structure_scan.go` classifies lexical spans and dispatches their token
+  categories to that owner, locates the outer-body boundary, and rejects slash-ambiguous headers; and
+  `internal/lsp/hover_conversion.go` owns hover decoding
+  and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
   `lspDocumentSymbol`, `hoverResult`, `markupContent`, and the numeric symbol-kind map.
 - `internal/lsp/conversion.go` contains document-symbol, location, position, and range conversion;
@@ -79,8 +89,8 @@ Raw conversion is tested independently of the subprocess transport:
   unsupported or unrepresentable URIs, and conversion cancellation.
 - `signatures_test.go` and pinned hover fixtures cover Markdown extraction, symbol-aware tsgo
   display normalization, separation of signature from document-symbol detail, missing and malformed
-  hover, source-backed synthetic signatures, input ordering, bounded concurrency, cancellation, and
-  first-error behavior.
+  hover, retained-source class/interface headers, source-backed synthetic signatures, input ordering,
+  bounded concurrency, cancellation, and first-error behavior.
 - `framing_conversion_test.go` covers cancellation precedence and the absence of partial converted
   output.
 
@@ -168,12 +178,25 @@ fence crosses the normalization boundary. An honest null/empty hover leaves the 
 canonical signature empty; it does not remove the symbol.
 
 `SymbolSignatures` returns one string per input symbol in input order. Empty input returns a
-non-nil empty slice. Some synthetic bodyless declarations are summarized directly from the exact
-source snapshot retained by `didOpen`; other entries use hover. Hover work is capped at eight
-concurrent requests. Planning or retained-source errors return before hover dispatch. After the
-hover batch starts, the first request or decoding error cancels its sibling work; caller cancellation
-also stops the batch. Every error path returns no signature slice. The tools layer also rejects a
-successful result whose length differs from the retained symbol count.
+non-nil empty slice. Named classes and interfaces prefer a complete declaration header extracted
+from their canonical range in the exact source snapshot retained by `didOpen`.
+`declaration_headers.go` validates the retained range, symbol kind, and name, removes preceding
+modifiers and lexical trivia, preserves literals and non-trivia source such as valid generic and
+`extends`/`implements` text, and collapses syntactic whitespace. One request-local
+`declarationStructure` owns every token's validity effect, including operator and pending-arrow
+transitions, conditional completeness, generic purpose and relational ambiguity, legal
+class/interface heritage phases, operands, separators, and closure. Its recognized-token metadata
+owns lexical boundaries, operand requirements, and terminal completeness. The scanner only
+classifies and dispatches lexical spans, accepts the outer-body boundary when that owner reports a
+complete state, and conservatively rejects ambiguous slash syntax.
+Anonymous, mismatched, lexically incomplete, structurally malformed, slash-ambiguous, or otherwise
+unrecognized headers remain on the existing hover path; extraction never returns a partial source
+header. Some synthetic bodyless declarations are also summarized directly from the
+retained snapshot, while other entries use hover. Hover work is capped at eight concurrent requests.
+Planning or retained-source errors return before hover dispatch. After the hover batch starts, the
+first request or decoding error cancels its sibling work; caller cancellation also stops the batch.
+Every error path returns no signature slice. The tools layer also rejects a successful result whose
+length differs from the retained symbol count.
 
 ## Two-stage bounded structural retrieval
 

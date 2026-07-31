@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,13 +36,13 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 		{
 			file: "member-signatures.ts",
 			want: map[string]string{
-				"Box@0":       "class Box<T>",
+				"Box@0":       "class Box<T> extends Array<T> implements Iterable<T>",
 				"value@1":     "value: T",
 				"size@5":      "size: number",
 				"members@10":  "const members: {\n    method(x: number): number;\n    prop: number;\n}",
 				"method@10":   "method(x: number): number",
 				"prop@10":     "prop: number",
-				"Weird@12":    "interface Weird",
+				"Weird@12":    "interface Weird extends Readonly<Record<string, unknown>>, Iterable<unknown>",
 				"optional@13": "optional?(): void",
 			},
 		},
@@ -79,6 +80,56 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 				if got[key] != want {
 					t.Errorf("signature %s = %q, want %q (all: %+v)", key, got[key], want, got)
 				}
+			}
+		})
+	}
+}
+
+func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
+	p := newTestProvider(t)
+	file := absTestdata(t, "malformed-heritage.ts")
+	symbols, err := p.DocumentSymbols(testCtx(t), file)
+	if err != nil {
+		t.Fatalf("DocumentSymbols: %v", err)
+	}
+	byName := make(map[string]core.Symbol)
+	for _, symbol := range flattenCoreSymbols(symbols) {
+		byName[symbol.Name] = symbol
+	}
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "DuplicateGenericOperand", want: "class DuplicateGenericOperand"},
+		{name: "Broken", want: "class Broken<T = C>"},
+		{name: "Dup", want: "class Dup"},
+		{name: "Regex", want: "class Regex"},
+		{name: "MissingGenericOperand", want: "class MissingGenericOperand"},
+		{name: "MissingConstraintOperand", want: "class MissingConstraintOperand<T extends any, A>"},
+		{name: "DuplicateCallOperand", want: "class DuplicateCallOperand"},
+		{name: "DuplicateObjectSeparator", want: "class DuplicateObjectSeparator<T extends {\n    first: A;\n    second: A;\n}>"},
+		{name: "RepeatedUnion", want: "class RepeatedUnion<T extends any>"},
+		{name: "RepeatedIntersection", want: "class RepeatedIntersection<T extends any>"},
+		{name: "MixedUnionIntersection", want: "class MixedUnionIntersection<T extends any>"},
+		{name: "MixedIntersectionUnion", want: "class MixedIntersectionUnion<T extends any>"},
+		{name: "MissingInterfaceSeparator", want: "interface MissingInterfaceSeparator"},
+		{name: "MissingClassSeparator", want: "class MissingClassSeparator"},
+		{name: "GenericAdjacency", want: "class GenericAdjacency<T, U>"},
+		{name: "ParenthesizedAdjacency", want: "class ParenthesizedAdjacency"},
+		{name: "NestedGenericAdjacency", want: "class NestedGenericAdjacency"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			symbol, ok := byName[tc.name]
+			if !ok {
+				t.Fatalf("symbol not returned by tsgo; symbols = %+v", symbols)
+			}
+			signatures, err := p.SymbolSignatures(testCtx(t), file, []core.Symbol{symbol})
+			if err != nil {
+				t.Fatalf("SymbolSignatures: %v", err)
+			}
+			if len(signatures) != 1 || signatures[0] != tc.want {
+				t.Fatalf("signatures = %#v, want hover-normalized %q", signatures, tc.want)
 			}
 		})
 	}
@@ -197,7 +248,7 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := planSignature(tc.symbol, source)
+			got, err := planSignature(context.Background(), tc.symbol, source)
 			if err != nil {
 				t.Fatalf("planSignature: %v", err)
 			}
@@ -205,6 +256,458 @@ func TestPlanSignatureUsesAuthoritativeSyntheticLocations(t *testing.T) {
 				t.Fatalf("plan = %+v, want position=%+v direct=%q and original symbol", got, tc.wantPosition, tc.wantDirect)
 			}
 		})
+	}
+}
+
+func TestExtractDeclarationHeader(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		symbol core.Symbol
+		want   string
+	}{
+		{
+			name:   "simple class excludes modifiers and body",
+			source: "export class Circle {\n  area(): number { return 1; }\n}",
+			symbol: core.Symbol{Name: "Circle", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "class Circle",
+		},
+		{
+			name: "multiline generic class with multiple heritage targets",
+			source: "export abstract class RedisSessionStore<T extends Session>\n" +
+				"  extends BaseStore<T>\n" +
+				"  implements SessionStore, Disposable\n" +
+				"{\n  value = 1;\n}",
+			symbol: core.Symbol{Name: "RedisSessionStore", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 5, Character: 1}}},
+			want:   "class RedisSessionStore<T extends Session> extends BaseStore<T> implements SessionStore, Disposable",
+		},
+		{
+			name:   "interface with multiple heritage targets",
+			source: "export interface CachedStore<T> extends SessionStore<T>, Disposable {\n  get(): T;\n}",
+			symbol: core.Symbol{Name: "CachedStore", Kind: core.SymbolKindInterface, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "interface CachedStore<T> extends SessionStore<T>, Disposable",
+		},
+		{
+			name:   "braced object generic constraint",
+			source: "class Registry<T extends { value: string; nested: { count: number } }> extends Base<T> {\n  body = true;\n}",
+			symbol: core.Symbol{Name: "Registry", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 2, Character: 1}}},
+			want:   "class Registry<T extends { value: string; nested: { count: number } }> extends Base<T>",
+		},
+		{
+			name:   "mapped object type",
+			source: "class Mapped<T extends { [K in keyof Source]: Source[K] }> {}",
+			symbol: core.Symbol{Name: "Mapped", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 61}}},
+			want:   "class Mapped<T extends { [K in keyof Source]: Source[K] }>",
+		},
+		{
+			name:   "object property named in",
+			source: "class UsesIn<T extends { in: string }> {}",
+			symbol: core.Symbol{Name: "UsesIn", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+			want:   "class UsesIn<T extends { in: string }>",
+		},
+		{
+			name: "comments and literal braces are not body openers",
+			source: "export /* modifier */ class Tagged<T extends { open: \"{\"; close: `}`; }>\n" +
+				"/* clause */ extends Base<T> {\n  body = \"implements Wrong\";\n}",
+			symbol: core.Symbol{Name: "Tagged", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{}, End: core.Position{Line: 3, Character: 1}}},
+			want:   "class Tagged<T extends { open: \"{\"; close: `}`; }> extends Base<T>",
+		},
+		{
+			name:   "relational heritage expression",
+			source: "class Selected extends (a < b ? A : B) {}",
+			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+			want:   "class Selected extends (a < b ? A : B)",
+		},
+		{
+			name:   "relational expression with generic optional tuple",
+			source: "class Derived extends choose(A < Foo<[string?]>) {}",
+			symbol: core.Symbol{Name: "Derived", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 51}}},
+			want:   "class Derived extends choose(A < Foo<[string?]>)",
+		},
+		{
+			name:   "nested generic heritage expression",
+			source: "class Nested extends Base<Outer<Inner>, Pair<A, B>> {}",
+			symbol: core.Symbol{Name: "Nested", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 54}}},
+			want:   "class Nested extends Base<Outer<Inner>, Pair<A, B>>",
+		},
+		{
+			name:   "tuple heritage expression",
+			source: "class Tupled extends choose([Base, Other]) {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 45}}},
+			want:   "class Tupled extends choose([Base, Other])",
+		},
+		{
+			name:   "optional tuple operand",
+			source: "class Tupled<T extends [string?]> {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+			want:   "class Tupled<T extends [string?]>",
+		},
+		{
+			name:   "union and intersection generic constraint",
+			source: "class Combined<T extends A | B & C> {}",
+			symbol: core.Symbol{Name: "Combined", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+			want:   "class Combined<T extends A | B & C>",
+		},
+		{
+			name:   "prefix type operators",
+			source: "class Projected<T extends keyof A | typeof value> {}",
+			symbol: core.Symbol{Name: "Projected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 52}}},
+			want:   "class Projected<T extends keyof A | typeof value>",
+		},
+		{
+			name:   "conditional generic default",
+			source: "class Defaulted<T = A extends B ? C : D> {}",
+			symbol: core.Symbol{Name: "Defaulted", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+			want:   "class Defaulted<T = A extends B ? C : D>",
+		},
+		{
+			name:   "parenthesized conditional generic default",
+			source: "class Wrapped<T = (A extends B ? C : D)> {}",
+			symbol: core.Symbol{Name: "Wrapped", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+			want:   "class Wrapped<T = (A extends B ? C : D)>",
+		},
+		{
+			name:   "optional function generic default",
+			source: "class Handler<T = (value?: string) => void> {}",
+			symbol: core.Symbol{Name: "Handler", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 46}}},
+			want:   "class Handler<T = (value?: string) => void>",
+		},
+		{
+			name:   "conditional tuple operand",
+			source: "class Tupled<T extends [A extends B ? C : D]> {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 48}}},
+			want:   "class Tupled<T extends [A extends B ? C : D]>",
+		},
+		{
+			name:   "nested conditional tuple operand",
+			source: "class Nested<T extends [A extends B ? C extends D ? E : F : G]> {}",
+			symbol: core.Symbol{Name: "Nested", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 66}}},
+			want:   "class Nested<T extends [A extends B ? C extends D ? E : F : G]>",
+		},
+		{
+			name:   "reserved-word heritage property",
+			source: "class Selected extends constructors.new {}",
+			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
+			want:   "class Selected extends constructors.new",
+		},
+		{
+			name:   "heritage expression with sparse array",
+			source: "class Derived extends choose([Base,, Base]) {}",
+			symbol: core.Symbol{Name: "Derived", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 46}}},
+			want:   "class Derived extends choose([Base,, Base])",
+		},
+		{
+			name:   "UTF-16 range",
+			source: "😀 export class Café<T> extends Base<T> {}",
+			symbol: core.Symbol{Name: "Café", Kind: core.SymbolKindClass, Range: core.Range{Start: core.Position{Character: 3}, End: core.Position{Character: 42}}},
+			want:   "class Café<T> extends Base<T>",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := extractDeclarationHeader(context.Background(), tc.source, tc.symbol)
+			if err != nil {
+				t.Fatalf("extractDeclarationHeader: %v", err)
+			}
+			if !ok || got != tc.want {
+				t.Fatalf("header = (%q, %v), want (%q, true)", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		symbol core.Symbol
+	}{
+		{
+			name:   "mismatched name",
+			source: "class Actual {}",
+			symbol: core.Symbol{Name: "Expected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 15}}},
+		},
+		{
+			name:   "mismatched kind",
+			source: "interface Shape {}",
+			symbol: core.Symbol{Name: "Shape", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 18}}},
+		},
+		{
+			name:   "anonymous default class",
+			source: "export default class {}",
+			symbol: core.Symbol{Name: "default", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 23}}},
+		},
+		{
+			name:   "missing body",
+			source: "declare class Ambient<T>;",
+			symbol: core.Symbol{Name: "Ambient", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 25}}},
+		},
+		{
+			name:   "unterminated literal",
+			source: "class Broken<T extends { value: \"unterminated } {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 50}}},
+		},
+		{
+			name:   "unmatched generic closer",
+			source: "class Broken<T>> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 19}}},
+		},
+		{
+			name:   "incomplete heritage clause",
+			source: "class Broken extends {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 23}}},
+		},
+		{
+			name:   "incomplete generic constraint",
+			source: "class Broken<T extends> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
+		{
+			name:   "repeated union operator",
+			source: "class Broken<T extends A | | B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "repeated intersection operator",
+			source: "class Broken<T extends A & & B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent union and intersection operators",
+			source: "class Broken<T extends A | & B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent intersection and union operators",
+			source: "class Broken<T extends A & | B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent generic parameters",
+			source: "class GenericAdjacency<T U> {}",
+			symbol: core.Symbol{Name: "GenericAdjacency", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "adjacent parenthesized operands",
+			source: "class Broken extends factory(A B) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+		},
+		{
+			name:   "adjacent nested generic operands",
+			source: "class Broken extends A<B C> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "adjacent literal operands",
+			source: "class Broken<T extends \"a\" \"b\"> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "missing interface heritage separator",
+			source: "interface Broken extends A B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 31}}},
+		},
+		{
+			name:   "missing class heritage separator",
+			source: "class Broken implements A B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "duplicate heritage separator",
+			source: "class Broken extends Base,, Other {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+		},
+		{
+			name:   "duplicate generic separator",
+			source: "class Broken extends Base<A,, B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 35}}},
+		},
+		{
+			name:   "duplicate generic separator in expression",
+			source: "class Broken extends choose(Base<A,, B>) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+		},
+		{
+			name:   "missing first generic operand",
+			source: "class Broken extends A<, A> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "missing generic constraint operand",
+			source: "class Broken<T extends, A> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 29}}},
+		},
+		{
+			name:   "duplicate call operand separator",
+			source: "class Broken extends choose(A,, A) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
+		{
+			name:   "duplicate object member separator",
+			source: "class Broken<T extends { first: A,, second: A }> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 51}}},
+		},
+		{
+			name:   "incomplete conditional array operand",
+			source: "class Broken extends choose([A ?]) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
+		{
+			name:   "incomplete relational array operand",
+			source: "class Broken extends choose(A < [B ?]) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
+			name:   "incomplete conditional tuple operand",
+			source: "class Broken<T extends [A extends B ?]> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
+		},
+		{
+			name:   "incomplete nested conditional tuple operand",
+			source: "class Broken<T extends [A extends B ? C extends D ? E : F]> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 62}}},
+		},
+		{
+			name:   "incomplete conditional-like generic default without extends",
+			source: "class Broken<T = A ? B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
+		{
+			name:   "incomplete conditional-like generic constraint without condition",
+			source: "class Broken<T extends A ? B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
+			name:   "optional function generic default missing arrow",
+			source: "class Broken<T = (value?: string)> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
+		{
+			name:   "optional function generic default keyword instead of arrow",
+			source: "class Broken<T = (value?: string) extends U> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 47}}},
+		},
+		{
+			name:   "conditional-like parenthesized type default",
+			source: "class Broken<T = (A ? B)> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 28}}},
+		},
+		{
+			name:   "relational candidate inside type default",
+			source: "class Broken<T = (A < B ? C)> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing colon",
+			source: "class Broken<T = A extends B ? C> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing true arm",
+			source: "class Broken<T = A extends B ? : D> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing false arm",
+			source: "class Broken<T = A extends B ? C :> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+		},
+		{
+			name:   "duplicate class extends clause",
+			source: "class Dup extends Base extends A {}",
+			symbol: core.Symbol{Name: "Dup", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 35}}},
+		},
+		{
+			name:   "class heritage order",
+			source: "class Broken implements A extends Base {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
+			name:   "duplicate class implements clause",
+			source: "class Broken implements A implements B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
+			name:   "interface implements clause",
+			source: "interface Broken implements A {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
+			name:   "duplicate interface extends clause",
+			source: "interface Broken extends A extends B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 39}}},
+		},
+		{
+			name:   "ambiguous slash heritage",
+			source: "class Regex extends /x{1}/.constructor {}",
+			symbol: core.Symbol{Name: "Regex", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := extractDeclarationHeader(context.Background(), tc.source, tc.symbol)
+			if err != nil {
+				t.Fatalf("extractDeclarationHeader: %v", err)
+			}
+			if ok || got != "" {
+				t.Fatalf("header = (%q, %v), want atomic fallback", got, ok)
+			}
+		})
+	}
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	c.remaining--
+	if c.remaining <= 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestExtractDeclarationHeaderCancelsDuringRangeMapping(t *testing.T) {
+	source := strings.Repeat("/* retained snapshot trivia */ ", 1024) + "class Target {}"
+	symbol := core.Symbol{
+		Name:  "Target",
+		Kind:  core.SymbolKindClass,
+		Range: core.Range{End: core.Position{Character: len(source)}},
+	}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), remaining: 5}
+	got, ok, err := extractDeclarationHeader(ctx, source, symbol)
+	if !errors.Is(err, context.Canceled) || ok || got != "" {
+		t.Fatalf("header = (%q, %v, %v), want atomic context cancellation", got, ok, err)
+	}
+}
+
+func TestPlanSignaturePrefersCompleteDeclarationHeader(t *testing.T) {
+	source := "export class Circle implements Shape { body = true; }"
+	symbol := core.Symbol{
+		Name:     "Circle",
+		Kind:     core.SymbolKindClass,
+		Range:    core.Range{End: core.Position{Character: len(source)}},
+		SelRange: core.Range{Start: core.Position{Character: 13}, End: core.Position{Character: 19}},
+	}
+	got, err := planSignature(context.Background(), symbol, source)
+	if err != nil {
+		t.Fatalf("planSignature: %v", err)
+	}
+	if got.direct != "class Circle implements Shape" {
+		t.Fatalf("direct signature = %q, want source header", got.direct)
+	}
+
+	symbol.Name = "Other"
+	got, err = planSignature(context.Background(), symbol, source)
+	if err != nil {
+		t.Fatalf("fallback planSignature: %v", err)
+	}
+	if got.direct != "" || got.position != symbol.SelRange.Start {
+		t.Fatalf("fallback plan = %+v, want unchanged hover position", got)
 	}
 }
 

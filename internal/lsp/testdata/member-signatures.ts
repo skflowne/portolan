@@ -1,4 +1,4 @@
-export class Box<T> {
+export class Box<T> extends Array<T> implements Iterable<T> {
   get value(): T {
     throw new Error("not implemented");
   }
@@ -10,6 +10,6 @@ export class Box<T> {
 
 export const members = { method(x: number): number { return x; }, prop: 1 };
 
-export interface Weird {
+export interface Weird extends Readonly<Record<string, unknown>>, Iterable<unknown> {
   optional?(): void;
 }

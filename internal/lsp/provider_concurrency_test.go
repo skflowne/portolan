@@ -117,40 +117,74 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 }
 
 func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
-	writer := newRecordingWriteCloser()
-	text := "interface Callable {\n  (value: number): string;\n}\n"
-	reads := 0
-	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
-		reads++
-		return []byte(text), nil
-	}, writer)
-
-	if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
-		t.Fatalf("ensureOpen: %v", err)
-	}
-	text = "const changed = 1;\n"
-
-	symbols := []core.Symbol{{
-		Name: "()",
-		Kind: "method",
-		Range: core.Range{
-			Start: core.Position{Line: 1, Character: 2},
-			End:   core.Position{Line: 1, Character: 26},
+	tests := []struct {
+		name   string
+		source string
+		symbol core.Symbol
+		want   string
+	}{
+		{
+			name:   "class header",
+			source: "export class Box<T> extends Base<T> {\n  value!: T;\n}\n",
+			symbol: core.Symbol{
+				Name: "Box",
+				Kind: core.SymbolKindClass,
+				Range: core.Range{
+					Start: core.Position{},
+					End:   core.Position{Line: 2, Character: 1},
+				},
+				SelRange: core.Range{
+					Start: core.Position{Character: 13},
+					End:   core.Position{Character: 16},
+				},
+			},
+			want: "class Box<T> extends Base<T>",
 		},
-		SelRange: core.Range{
-			Start: core.Position{Line: 1, Character: 2},
-			End:   core.Position{Line: 1, Character: 2},
+		{
+			name:   "bodyless call signature",
+			source: "interface Callable {\n  (value: number): string;\n}\n",
+			symbol: core.Symbol{
+				Name: "()",
+				Kind: "method",
+				Range: core.Range{
+					Start: core.Position{Line: 1, Character: 2},
+					End:   core.Position{Line: 1, Character: 26},
+				},
+				SelRange: core.Range{
+					Start: core.Position{Line: 1, Character: 2},
+					End:   core.Position{Line: 1, Character: 2},
+				},
+			},
+			want: "(value: number): string",
 		},
-	}}
-	got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", symbols)
-	if err != nil {
-		t.Fatalf("SymbolSignatures: %v", err)
 	}
-	if len(got) != 1 || got[0] != "(value: number): string" {
-		t.Fatalf("signatures = %q, want didOpen snapshot declaration", got)
-	}
-	if reads != 1 {
-		t.Fatalf("file reads = %d, want one", reads)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := newRecordingWriteCloser()
+			text := tc.source
+			reads := 0
+			p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
+				reads++
+				return []byte(text), nil
+			}, writer)
+
+			if err := p.ensureOpen(context.Background(), "/repo/a.ts"); err != nil {
+				t.Fatalf("ensureOpen: %v", err)
+			}
+			text = "const changed = 1;\n"
+
+			got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", []core.Symbol{tc.symbol})
+			if err != nil {
+				t.Fatalf("SymbolSignatures: %v", err)
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("signatures = %q, want retained didOpen signature %q", got, tc.want)
+			}
+			if reads != 1 {
+				t.Fatalf("file reads = %d, want one", reads)
+			}
+		})
 	}
 }
 
