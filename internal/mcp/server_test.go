@@ -188,6 +188,18 @@ func TestNewServer_GetOutlineDescriptionMatchesRenderedText(t *testing.T) {
 	if description == "" {
 		t.Fatal("get_outline tool has no description to bridge")
 	}
+	for _, claim := range []string{
+		"compact provider-authoritative declaration or type summary",
+		"preserves source-backed declaration syntax where available",
+		"falls back to its kind and name",
+	} {
+		if !strings.Contains(description, claim) {
+			t.Errorf("get_outline description does not state %q: %q", claim, description)
+		}
+	}
+	if strings.Contains(description, "declaration as written in the source") {
+		t.Errorf("get_outline description promises source-exact declarations: %q", description)
+	}
 
 	out := tools.GetOutlineOutput{
 		Found: true,
