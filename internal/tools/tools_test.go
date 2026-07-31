@@ -47,27 +47,19 @@ type fileCallResult struct {
 	freshness core.Freshness
 	message   string
 	errorText string
-	// file is the canonical file identity the tool reports back; whether one
-	// is expected at all is declared per tool by fileToolCase.reportsFile.
+	// file is the canonical file identity the tool reports back.
 	file string
 	err  error
 }
 
 type fileToolCase struct {
 	name string
-	// reportsFile declares whether this tool's result carries a file identity.
-	// It is what makes the shared identity assertions enforceable in both
-	// directions: a declaring tool must report the canonical path on every
-	// success path, and a non-declaring one must report nothing. Without the
-	// declaration a tool that silently drops the assignment would satisfy the
-	// assertions vacuously in the package that owns the fact.
+	// reportsFile binds both directions: a declaring tool must report the
+	// canonical path on every success path, an undeclared one must report none.
 	reportsFile bool
 	call        func(context.Context, *Tools, string) fileCallResult
 }
 
-// checkReportedFile asserts the identity half of the file contract on a
-// success path: a tool that declares reportsFile must report exactly the
-// canonical path, and one that does not must report nothing at all.
 func (c fileToolCase) checkReportedFile(t *testing.T, got fileCallResult, canonical string) {
 	t.Helper()
 	want := ""
