@@ -85,6 +85,29 @@ func TestSymbolSignaturesFromTsgo(t *testing.T) {
 	}
 }
 
+func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
+	p := newTestProvider(t)
+	file := absTestdata(t, "malformed-heritage.ts")
+	symbols, err := p.DocumentSymbols(testCtx(t), file)
+	if err != nil {
+		t.Fatalf("DocumentSymbols: %v", err)
+	}
+	for _, symbol := range flattenCoreSymbols(symbols) {
+		if symbol.Name != "Broken" {
+			continue
+		}
+		signatures, err := p.SymbolSignatures(testCtx(t), file, []core.Symbol{symbol})
+		if err != nil {
+			t.Fatalf("SymbolSignatures: %v", err)
+		}
+		if len(signatures) != 1 || signatures[0] != "class Broken" {
+			t.Fatalf("signatures = %#v, want hover-normalized class declaration", signatures)
+		}
+		return
+	}
+	t.Fatal("Broken symbol not returned by tsgo")
+}
+
 func flattenCoreSymbols(symbols []core.SymbolNode) []core.Symbol {
 	var flat []core.Symbol
 	var visit func([]core.SymbolNode)
@@ -328,6 +351,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "incomplete generic constraint",
 			source: "class Broken<T extends> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
+		{
+			name:   "duplicate heritage separator",
+			source: "class Broken extends Base,, Other {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
 		},
 	}
 
