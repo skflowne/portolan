@@ -300,6 +300,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Mapped<T extends { [K in keyof Source]: Source[K] }>",
 		},
 		{
+			name:   "object property named in",
+			source: "class UsesIn<T extends { in: string }> {}",
+			symbol: core.Symbol{Name: "UsesIn", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+			want:   "class UsesIn<T extends { in: string }>",
+		},
+		{
 			name: "comments and literal braces are not body openers",
 			source: "export /* modifier */ class Tagged<T extends { open: \"{\"; close: `}`; }>\n" +
 				"/* clause */ extends Base<T> {\n  body = \"implements Wrong\";\n}",
