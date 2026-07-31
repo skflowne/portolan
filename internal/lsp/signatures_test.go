@@ -368,6 +368,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			source: "class Broken extends Base<A,, B> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 35}}},
 		},
+		{
+			name:   "duplicate generic separator in expression",
+			source: "class Broken extends choose(Base<A,, B>) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+		},
 	}
 
 	for _, tc := range tests {

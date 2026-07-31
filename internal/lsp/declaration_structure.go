@@ -20,6 +20,9 @@ const (
 type declarationContext struct {
 	kind declarationContextKind
 	last string
+	// Expression contexts treat an unmatched generic candidate as a relational operator.
+	tentativeGeneric bool
+	invalidSeparator bool
 }
 
 type declarationStructure struct {
@@ -39,6 +42,10 @@ func (s *declarationStructure) open(kind declarationContextKind, token string) {
 }
 
 func (s *declarationStructure) close(kind declarationContextKind) bool {
+	for len(s.contexts) > 1 && s.current().kind == declarationGeneric && s.current().tentativeGeneric {
+		s.contexts = s.contexts[:len(s.contexts)-1]
+		s.current().last = "value"
+	}
 	if len(s.contexts) == 1 || s.current().kind != kind {
 		return false
 	}
@@ -55,15 +62,23 @@ func (s *declarationStructure) atRoot() bool {
 	return s.current().kind == declarationRoot
 }
 
-func (s *declarationStructure) acceptsGeneric() bool {
-	kind := s.current().kind
-	return kind == declarationRoot || kind == declarationGeneric
+func (s *declarationStructure) openGeneric() {
+	currentKind := s.current().kind
+	if currentKind == declarationRoot || currentKind == declarationGeneric {
+		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<"})
+	} else if s.current().last == "value" {
+		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<", tentativeGeneric: true})
+	}
 }
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
 	if (current.kind == declarationRoot || current.kind == declarationGeneric) && current.last == "," {
-		return false
+		if current.tentativeGeneric {
+			current.invalidSeparator = true
+		} else {
+			return false
+		}
 	}
 	current.last = ","
 	return true
@@ -71,10 +86,13 @@ func (s *declarationStructure) acceptSeparator() bool {
 
 func (s *declarationStructure) closeGeneric() bool {
 	current := s.current()
-	if current.kind != declarationGeneric || current.last != "," && incompleteDeclarationToken(current.last) {
+	if current.kind != declarationGeneric || current.invalidSeparator ||
+		current.last != "," && incompleteDeclarationToken(current.last) {
 		return false
 	}
-	return s.close(declarationGeneric)
+	s.contexts = s.contexts[:len(s.contexts)-1]
+	s.current().last = "value"
+	return true
 }
 
 func declarationBodyOffset(ctx context.Context, source string, start, end int) (int, bool, error) {
@@ -121,16 +139,19 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 				return 0, false, nil
 			}
 		case '<':
-			if structure.acceptsGeneric() {
-				structure.open(declarationGeneric, "<")
-			}
+			structure.openGeneric()
 		case '>':
-			if structure.acceptsGeneric() {
+			if structure.current().kind == declarationGeneric {
 				if i > start && source[i-1] == '=' {
 					structure.mark("=>")
 				} else if !structure.closeGeneric() {
 					return 0, false, nil
 				}
+			} else if structure.atRoot() {
+				if i <= start || source[i-1] != '=' {
+					return 0, false, nil
+				}
+				structure.mark("=>")
 			}
 		case '{':
 			if structure.atRoot() {
