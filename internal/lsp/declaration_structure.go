@@ -54,6 +54,7 @@ type declarationContext struct {
 	genericPurpose   declarationGenericPurpose
 	parameterStage   declarationParameterStage
 	candidateInvalid bool
+	requiresArrow    bool
 }
 
 type declarationStructure struct {
@@ -101,13 +102,19 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 	if len(s.contexts) == 1 || s.current().kind != kind || !s.current().canClose() {
 		return false
 	}
+	requiresArrow := s.current().requiresArrow ||
+		s.current().kind == declarationParen && s.current().typeContext && s.current().last == "("
 	s.contexts = s.contexts[:len(s.contexts)-1]
+	if requiresArrow {
+		s.current().last = "pendingArrow"
+		return true
+	}
 	return s.markValue()
 }
 
 func (s *declarationStructure) markValue() bool {
 	current := s.current()
-	if current.last == "optional" || s.atRoot() && !s.inHeritageOperand() {
+	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	current.completeConditionalValue()
@@ -194,6 +201,7 @@ func (s *declarationStructure) markQuestion() bool {
 		return true
 	}
 	if current.typeContext && current.last == "value" && current.kind == declarationParen {
+		current.requiresArrow = true
 		current.last = "optional"
 		return true
 	}
@@ -229,12 +237,22 @@ func (s *declarationStructure) markColon() bool {
 	} else if incompleteDeclarationToken(current.last) {
 		return false
 	}
+	if current.kind == declarationParen && current.typeContext {
+		current.requiresArrow = true
+	}
 	current.last = ":"
 	return true
 }
 
 func (s *declarationStructure) markOperator(token string) bool {
 	current := s.current()
+	if current.last == "pendingArrow" {
+		if token != "=>" {
+			return false
+		}
+		current.last = token
+		return true
+	}
 	if token == "=" && current.genericPurpose == declarationGenericParameters {
 		if current.parameterStage == declarationParameterDefault || incompleteDeclarationToken(current.last) {
 			return false
@@ -356,7 +374,7 @@ func (s *declarationStructure) canOpenBody() bool {
 func incompleteDeclarationToken(token string) bool {
 	switch token {
 	case "extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract",
-		"(", "[", "{", "<", ",", "?", "optional", ":", "=", "=>", "&", "|", ".":
+		"(", "[", "{", "<", ",", "?", "optional", "pendingArrow", ":", "=", "=>", "&", "|", ".":
 		return true
 	default:
 		return false
