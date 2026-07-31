@@ -313,6 +313,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Tupled<T extends [string?]>",
 		},
 		{
+			name:   "conditional tuple operand",
+			source: "class Tupled<T extends [A extends B ? C : D]> {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 48}}},
+			want:   "class Tupled<T extends [A extends B ? C : D]>",
+		},
+		{
 			name:   "reserved-word heritage property",
 			source: "class Selected extends constructors.new {}",
 			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
@@ -430,6 +436,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "incomplete conditional array operand",
 			source: "class Broken extends choose([A ?]) {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
+		{
+			name:   "incomplete conditional tuple operand",
+			source: "class Broken<T extends [A extends B ?]> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
 		},
 	}
 
