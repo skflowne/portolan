@@ -17,10 +17,21 @@ const (
 	declarationBrace
 )
 
+type declarationConditionalStage uint8
+
+const (
+	declarationConditionalNone declarationConditionalStage = iota
+	declarationConditionalCondition
+	declarationConditionalTrue
+	declarationConditionalTrueComplete
+	declarationConditionalFalse
+)
+
 type declarationContext struct {
 	kind        declarationContextKind
 	last        string
 	typeContext bool
+	conditional declarationConditionalStage
 	// Expression contexts treat an unmatched generic candidate as a relational operator.
 	tentativeGeneric bool
 }
@@ -49,25 +60,60 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 			return false
 		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
-		s.current().last = "value"
+		s.mark("value")
 	}
 	if len(s.contexts) == 1 || s.current().kind != kind || !s.current().canClose() {
 		return false
 	}
 	s.contexts = s.contexts[:len(s.contexts)-1]
-	s.current().last = "value"
+	s.mark("value")
 	return true
 }
 
 func (s *declarationStructure) mark(token string) {
-	s.current().last = token
+	current := s.current()
+	if token == "value" {
+		switch current.conditional {
+		case declarationConditionalTrue:
+			current.conditional = declarationConditionalTrueComplete
+		case declarationConditionalFalse:
+			current.conditional = declarationConditionalNone
+		}
+	}
+	current.last = token
+}
+
+func (s *declarationStructure) markKeyword(keyword string) {
+	current := s.current()
+	if current.last == "." {
+		s.mark("value")
+		return
+	}
+	if keyword == "extends" && current.kind == declarationBracket && current.typeContext && current.last == "value" {
+		current.conditional = declarationConditionalCondition
+	}
+	current.last = keyword
 }
 
 func (s *declarationStructure) markQuestion() {
 	current := s.current()
-	if current.kind != declarationBracket || !current.typeContext || current.last != "value" {
-		current.last = "?"
+	if current.kind == declarationBracket && current.typeContext && current.last == "value" {
+		if current.conditional == declarationConditionalNone {
+			return
+		}
+		if current.conditional == declarationConditionalCondition {
+			current.conditional = declarationConditionalTrue
+		}
 	}
+	current.last = "?"
+}
+
+func (s *declarationStructure) markColon() {
+	current := s.current()
+	if current.conditional == declarationConditionalTrueComplete {
+		current.conditional = declarationConditionalFalse
+	}
+	current.last = ":"
 }
 
 func (s *declarationStructure) atRoot() bool {
@@ -87,7 +133,7 @@ func (s *declarationStructure) openGeneric() {
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
-	if current.requiresListOperand() && !current.hasListOperand() {
+	if current.conditional != declarationConditionalNone || current.requiresListOperand() && !current.hasListOperand() {
 		return false
 	}
 	current.last = ","
@@ -110,6 +156,9 @@ func (c *declarationContext) hasListOperand() bool {
 }
 
 func (c *declarationContext) canClose() bool {
+	if c.conditional != declarationConditionalNone {
+		return false
+	}
 	if c.last == "," {
 		return true
 	}
@@ -140,7 +189,7 @@ func (s *declarationStructure) closeGeneric() bool {
 		return false
 	}
 	s.contexts = s.contexts[:len(s.contexts)-1]
-	s.current().last = "value"
+	s.mark("value")
 	return true
 }
 
@@ -165,11 +214,7 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			continue
 		}
 		if keyword, ok := declarationKeywordAt(source, i, end); ok {
-			if structure.current().last == "." {
-				structure.mark("value")
-			} else {
-				structure.mark(keyword)
-			}
+			structure.markKeyword(keyword)
 			i += len(keyword)
 			continue
 		}
@@ -225,7 +270,9 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			}
 		case '?':
 			structure.markQuestion()
-		case ':', '=', '&', '|', '.':
+		case ':':
+			structure.markColon()
+		case '=', '&', '|', '.':
 			structure.mark(string(source[i]))
 		default:
 			r, _ := utf8.DecodeRuneInString(source[i:end])
