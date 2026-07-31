@@ -107,7 +107,7 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 
 func (s *declarationStructure) markValue() bool {
 	current := s.current()
-	if s.atRoot() && !s.inHeritageOperand() {
+	if current.last == "optional" || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	current.completeConditionalValue()
@@ -193,6 +193,10 @@ func (s *declarationStructure) markQuestion() bool {
 		s.markGenericCandidateInvalid()
 		return true
 	}
+	if current.typeContext && current.last == "value" && current.kind == declarationParen {
+		current.last = "optional"
+		return true
+	}
 	if current.typeContext && current.genericPurpose != declarationGenericCandidate || incompleteDeclarationToken(current.last) {
 		return false
 	}
@@ -211,6 +215,10 @@ func (s *declarationStructure) markGenericCandidateInvalid() {
 
 func (s *declarationStructure) markColon() bool {
 	current := s.current()
+	if current.last == "optional" {
+		current.last = ":"
+		return true
+	}
 	current.reduceCompletedConditionals()
 	if len(current.conditionals) > 0 {
 		last := len(current.conditionals) - 1
@@ -246,6 +254,7 @@ func (s *declarationStructure) openGeneric() bool {
 		s.genericSeen = true
 	case s.atRoot() && s.inHeritageOperand() && current.last == "value":
 	case current.kind == declarationGeneric:
+	case current.last == "value" && current.typeContext:
 	case current.last == "value":
 		purpose = declarationGenericCandidate
 	default:
@@ -347,7 +356,7 @@ func (s *declarationStructure) canOpenBody() bool {
 func incompleteDeclarationToken(token string) bool {
 	switch token {
 	case "extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract",
-		"(", "[", "{", "<", ",", "?", ":", "=", "=>", "&", "|", ".":
+		"(", "[", "{", "<", ",", "?", "optional", ":", "=", "=>", "&", "|", ".":
 		return true
 	default:
 		return false

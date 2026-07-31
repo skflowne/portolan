@@ -54,13 +54,9 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			accepted = structure.openGeneric()
 		case '>':
 			if structure.current().kind == declarationGeneric {
-				if i > start && source[i-1] == '=' {
-					accepted = structure.markOperator("=>")
-				} else {
-					accepted = structure.closeGeneric()
-				}
+				accepted = structure.closeGeneric()
 			} else if structure.atRoot() {
-				accepted = i > start && source[i-1] == '=' && structure.markOperator("=>")
+				accepted = false
 			}
 		case '{':
 			if structure.atRoot() {
@@ -83,7 +79,14 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			accepted = structure.markQuestion()
 		case ':':
 			accepted = structure.markColon()
-		case '=', '&', '|', '.':
+		case '=':
+			if i+1 < end && source[i+1] == '>' {
+				accepted = structure.markOperator("=>")
+				i++
+			} else {
+				accepted = structure.markOperator("=")
+			}
+		case '&', '|', '.':
 			accepted = structure.markOperator(string(source[i]))
 		default:
 			r, _ := utf8.DecodeRuneInString(source[i:end])
