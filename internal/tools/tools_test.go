@@ -47,7 +47,10 @@ type fileCallResult struct {
 	freshness core.Freshness
 	message   string
 	errorText string
-	err       error
+	// file is the canonical file identity the tool reports back, empty for
+	// tools whose result has no such field.
+	file string
+	err  error
 }
 
 type fileToolCase struct {
@@ -61,21 +64,21 @@ func fileToolCases() []fileToolCase {
 			name: "find_definition",
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, err}
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
 			},
 		},
 		{
 			name: "find_references",
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, err}
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
 			},
 		},
 		{
 			name: "get_outline",
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.GetOutline(ctx, GetOutlineInput{File: file})
-				return fileCallResult{out.Found, len(out.Symbols), out.Truncated, out.Freshness, out.Message, out.Error, err}
+				return fileCallResult{out.Found, len(out.Symbols), out.Truncated, out.Freshness, out.Message, out.Error, out.File, err}
 			},
 		},
 	}
@@ -272,6 +275,9 @@ func TestToolsRejectInvalidFileBeforeProviderWork(t *testing.T) {
 				if got.errorText == "" || got.message == "" {
 					t.Fatalf("failure error=%q message=%q, want both populated", got.errorText, got.message)
 				}
+				if got.file != "" {
+					t.Fatalf("rejected input produced a file identity %q", got.file)
+				}
 				if input.file != "" && (strings.Contains(got.errorText, input.file) || strings.Contains(got.message, input.file)) {
 					t.Fatalf("failure exposed raw file %q: error=%q message=%q", input.file, got.errorText, got.message)
 				}
@@ -315,6 +321,9 @@ func TestToolsCanonicalizeEquivalentFileInputs(t *testing.T) {
 						t.Fatalf("provider file %d = %q, want %q", i+1, file, canonical)
 					}
 				}
+				if got.file != "" && got.file != canonical {
+					t.Fatalf("reported file = %q, want canonical %q", got.file, canonical)
+				}
 			})
 		}
 	}
@@ -341,6 +350,9 @@ func TestToolsUseCanonicalFileInEmptyMessages(t *testing.T) {
 				}
 				if input != canonical && strings.Contains(got.message, input) {
 					t.Fatalf("message = %q, must not expose raw file %q", got.message, input)
+				}
+				if got.file != "" && got.file != canonical {
+					t.Fatalf("reported file = %q, want canonical %q", got.file, canonical)
 				}
 			})
 		}

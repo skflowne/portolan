@@ -67,11 +67,12 @@ func NewServer(t *tools.Tools) *sdk.Server {
 			"file when you only need to know what's in it and where.\n\n" +
 			"The reply is compact text. Line 1 is `file <path>`; line 2 is `ranges 0-based`, " +
 			"meaning every `[startLine:startCharacter-endLine:endCharacter]` that follows is " +
-			"a zero-based, half-open range over the symbol's complete declaration. Then one " +
-			"line per symbol, indented two spaces per nesting level, in the order the " +
-			"language server reports them; a symbol with no available declaration text falls " +
-			"back to its kind and name. A blank line precedes a top-level symbol that follows " +
-			"a nested one. The last line is `N symbols; complete`, or " +
+			"a zero-based, half-open range over the symbol's complete declaration. A blank " +
+			"line closes the header; then one line per symbol, indented two spaces per " +
+			"nesting level, in the order the language server reports them; a symbol with no " +
+			"available declaration text falls back to its kind and name. Within that list a " +
+			"blank line precedes a top-level symbol that follows a nested one. After a final " +
+			"blank line the last line is `N symbols; complete`, or " +
 			"`N symbols; truncated: more symbols exist` when the result cap was reached.\n\n" +
 			"A file the language server has no symbols for answers `empty: <reason>`, which " +
 			"is an honest result and not a failure. An invalid path or a provider failure " +
