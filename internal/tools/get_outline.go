@@ -24,7 +24,12 @@ type GetOutlineOutput struct {
 	// Found is true iff the file produced at least one symbol. An empty
 	// file (or one the provider has no symbols for) is an honest, non-error
 	// result: Found is false and Message explains why.
-	Found     bool            `json:"found"`
+	Found bool `json:"found"`
+	// File is the canonical path the outline describes, recorded once the
+	// caller-supplied path clears the tools normalization boundary. It is the
+	// authoritative file identity for the result, including when no symbol
+	// carries it.
+	File      string          `json:"file,omitempty"`
 	Symbols   []OutlineSymbol `json:"symbols"`
 	Truncated bool            `json:"truncated"`
 	Freshness core.Freshness  `json:"freshness"`
@@ -46,6 +51,7 @@ func (t *Tools) GetOutline(ctx context.Context, in GetOutlineInput) (GetOutlineO
 			out.Message = failure.message
 			return
 		}
+		out.File = file
 		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.SymbolNode, error) {
 			return t.Provider.DocumentSymbols(ctx, file)
 		})

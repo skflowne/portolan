@@ -45,6 +45,12 @@ func Locations(locations []core.Location) string {
 	return rendered.String()
 }
 
+// FileLine names the single file an assembled projection describes, so
+// per-symbol lines never repeat it.
+func FileLine(file string) string {
+	return "file " + inlineText(file)
+}
+
 // Empty renders an honest-empty state marker.
 func Empty(message string) string {
 	return "empty: " + inlineText(message)

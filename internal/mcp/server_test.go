@@ -98,35 +98,13 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	if outline == nil {
 		t.Fatal("get_outline tool not found")
 	}
-	if !strings.Contains(outline.Description, "when the provider can authoritatively supply one") ||
-		!strings.Contains(outline.Description, "omitted signature") ||
-		!strings.Contains(outline.Description, "separate optional field") {
-		t.Fatalf("get_outline description does not explain signature availability and detail separation: %q", outline.Description)
-	}
-	schema, ok := outline.OutputSchema.(map[string]any)
-	if !ok {
-		t.Fatalf("get_outline output schema type = %T", outline.OutputSchema)
-	}
-	properties := schema["properties"].(map[string]any)
-	symbols := properties["symbols"].(map[string]any)
-	items := symbols["items"].(map[string]any)
-	symbolProperties := items["properties"].(map[string]any)
-	if _, exists := symbolProperties["children"]; exists {
-		t.Fatalf("flat outline schema advertises recursive hierarchy: %+v", symbolProperties["children"])
-	}
-	for field, wantDescription := range map[string]string{
-		"signature": "provider-authoritative",
-		"detail":    "independent of signature",
-	} {
-		property := symbolProperties[field].(map[string]any)
-		if property["type"] != "string" || !strings.Contains(property["description"].(string), wantDescription) {
-			t.Errorf("%s schema = %+v", field, property)
+	for _, grammar := range []string{"ranges 0-based", "two spaces per nesting level", "symbols; complete", "truncated: more symbols exist", "empty:", "error:"} {
+		if !strings.Contains(outline.Description, grammar) {
+			t.Errorf("get_outline description does not explain %q: %q", grammar, outline.Description)
 		}
 	}
-	for _, required := range items["required"].([]any) {
-		if required == "signature" || required == "detail" {
-			t.Errorf("optional outline field %q is required by schema", required)
-		}
+	if outline.OutputSchema != nil {
+		t.Fatalf("get_outline advertises an output schema for a text-only response: %+v", outline.OutputSchema)
 	}
 }
 
@@ -178,8 +156,12 @@ func TestNewServer_FindDefinitionRoundTrip(t *testing.T) {
 	}
 }
 
-func TestNewServer_GetOutlineOmitsUnavailableSignatureWithoutDroppingSymbol(t *testing.T) {
-	srv := NewServer(testTools(t))
+// TestNewServer_GetOutlineReturnsOnlyRenderedText asserts the MCP boundary
+// carries the compact outline exactly once: one text content item produced by
+// the tools renderer and no structured duplicate.
+func TestNewServer_GetOutlineReturnsOnlyRenderedText(t *testing.T) {
+	tl := testTools(t)
+	srv := NewServer(tl)
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -200,30 +182,25 @@ func TestNewServer_GetOutlineOmitsUnavailableSignatureWithoutDroppingSymbol(t *t
 	if res.IsError {
 		t.Fatalf("expected success, got error result: %+v", res)
 	}
-	raw, err := json.Marshal(res.StructuredContent)
+	if res.StructuredContent != nil {
+		t.Fatalf("get_outline duplicated its result as structured content: %+v", res.StructuredContent)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("get_outline content = %+v, want exactly one item", res.Content)
+	}
+	text, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("get_outline content item type = %T, want *sdk.TextContent", res.Content[0])
+	}
+	out, err := tl.GetOutline(ctx, tools.GetOutlineInput{File: "/repo/main.go"})
 	if err != nil {
-		t.Fatalf("marshal structured content: %v", err)
+		t.Fatalf("GetOutline: %v", err)
 	}
-	var output map[string]any
-	if err := json.Unmarshal(raw, &output); err != nil {
-		t.Fatalf("decode structured content: %v", err)
+	if text.Text != tools.RenderOutline(out) {
+		t.Fatalf("transport text = %q, want the tools renderer projection %q", text.Text, tools.RenderOutline(out))
 	}
-	if output["found"] != true {
-		t.Fatalf("found = %v, want true", output["found"])
-	}
-	symbols := output["symbols"].([]any)
-	if len(symbols) != 1 {
-		t.Fatalf("symbols = %+v, want one symbol", symbols)
-	}
-	symbol := symbols[0].(map[string]any)
-	if symbol["name"] != "DoThing" {
-		t.Fatalf("symbol = %+v, want DoThing", symbol)
-	}
-	if _, exists := symbol["signature"]; exists {
-		t.Fatalf("unavailable signature was serialized: %+v", symbol)
-	}
-	if _, exists := symbol["detail"]; exists {
-		t.Fatalf("unavailable detail was serialized: %+v", symbol)
+	if !strings.Contains(text.Text, "file /repo/main.go") || !strings.Contains(text.Text, "1 symbol; complete") {
+		t.Fatalf("get_outline text is not the compact outline: %q", text.Text)
 	}
 }
 

@@ -62,17 +62,29 @@ func NewServer(t *tools.Tools) *sdk.Server {
 		Name: "get_outline",
 		Description: "Navigate the code graph (via the language server) to get a file's " +
 			"structural outline: every top-level and nested symbol (classes, functions, " +
-			"methods, fields, etc.) with its kind, precise range, and compact semantic " +
-			"signature when the provider can authoritatively supply one. An omitted signature " +
-			"means no authoritative summary was available; provider document-symbol detail " +
-			"remains a separate optional field. Symbols are flattened into a depth-tagged " +
-			"list (depth 0 = top-level; a child immediately " +
-			"follows its parent in the list). Prefer this over reading a whole file when you " +
-			"only need to know what's in it and where. Results are capped (see `truncated`) " +
-			"and carry a freshness stamp (generation/stale).",
-	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.GetOutlineInput) (*sdk.CallToolResult, tools.GetOutlineOutput, error) {
+			"methods, fields, etc.) with its declaration as written in the source, enriched " +
+			"with the types the language server infers. Prefer this over reading a whole " +
+			"file when you only need to know what's in it and where.\n\n" +
+			"The reply is compact text. Line 1 is `file <path>`; line 2 is `ranges 0-based`, " +
+			"meaning every `[startLine:startCharacter-endLine:endCharacter]` that follows is " +
+			"a zero-based, half-open range over the symbol's complete declaration. Then one " +
+			"line per symbol, indented two spaces per nesting level, in the order the " +
+			"language server reports them; a symbol with no available declaration text falls " +
+			"back to its kind and name. A blank line precedes a top-level symbol that follows " +
+			"a nested one. The last line is `N symbols; complete`, or " +
+			"`N symbols; truncated: more symbols exist` when the result cap was reached.\n\n" +
+			"A file the language server has no symbols for answers `empty: <reason>`, which " +
+			"is an honest result and not a failure. An invalid path or a provider failure " +
+			"answers `error: <what failed>: <cause>`. Result freshness is tracked internally " +
+			"and is not part of this text.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.GetOutlineInput) (*sdk.CallToolResult, any, error) {
 		out, err := t.GetOutline(ctx, in)
-		return nil, out, err
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: tools.RenderOutline(out)}},
+		}, nil, nil
 	})
 
 	return srv
