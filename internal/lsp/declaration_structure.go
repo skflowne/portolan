@@ -228,7 +228,8 @@ func (s *declarationStructure) markColon() bool {
 		return true
 	}
 	current.reduceCompletedConditionals()
-	if len(current.conditionals) > 0 {
+	conditional := len(current.conditionals) > 0
+	if conditional {
 		last := len(current.conditionals) - 1
 		if current.conditionals[last] != declarationConditionalTrueComplete {
 			return false
@@ -237,7 +238,7 @@ func (s *declarationStructure) markColon() bool {
 	} else if incompleteDeclarationToken(current.last) {
 		return false
 	}
-	if current.kind == declarationParen && current.typeContext {
+	if !conditional && current.kind == declarationParen && current.typeContext {
 		current.requiresArrow = true
 	}
 	current.last = ":"

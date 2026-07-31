@@ -328,6 +328,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Defaulted<T = A extends B ? C : D>",
 		},
 		{
+			name:   "parenthesized conditional generic default",
+			source: "class Wrapped<T = (A extends B ? C : D)> {}",
+			symbol: core.Symbol{Name: "Wrapped", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+			want:   "class Wrapped<T = (A extends B ? C : D)>",
+		},
+		{
 			name:   "optional function generic default",
 			source: "class Handler<T = (value?: string) => void> {}",
 			symbol: core.Symbol{Name: "Handler", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 46}}},
