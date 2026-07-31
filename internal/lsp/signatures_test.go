@@ -92,20 +92,34 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DocumentSymbols: %v", err)
 	}
+	byName := make(map[string]core.Symbol)
 	for _, symbol := range flattenCoreSymbols(symbols) {
-		if symbol.Name != "Broken" {
-			continue
-		}
-		signatures, err := p.SymbolSignatures(testCtx(t), file, []core.Symbol{symbol})
-		if err != nil {
-			t.Fatalf("SymbolSignatures: %v", err)
-		}
-		if len(signatures) != 1 || signatures[0] != "class Broken" {
-			t.Fatalf("signatures = %#v, want hover-normalized class declaration", signatures)
-		}
-		return
+		byName[symbol.Name] = symbol
 	}
-	t.Fatal("Broken symbol not returned by tsgo")
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "MissingGenericOperand", want: "class MissingGenericOperand"},
+		{name: "MissingConstraintOperand", want: "class MissingConstraintOperand<T extends any, A>"},
+		{name: "DuplicateCallOperand", want: "class DuplicateCallOperand"},
+		{name: "DuplicateObjectSeparator", want: "class DuplicateObjectSeparator<T extends {\n    first: A;\n    second: A;\n}>"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			symbol, ok := byName[tc.name]
+			if !ok {
+				t.Fatalf("symbol not returned by tsgo; symbols = %+v", symbols)
+			}
+			signatures, err := p.SymbolSignatures(testCtx(t), file, []core.Symbol{symbol})
+			if err != nil {
+				t.Fatalf("SymbolSignatures: %v", err)
+			}
+			if len(signatures) != 1 || signatures[0] != tc.want {
+				t.Fatalf("signatures = %#v, want hover-normalized %q", signatures, tc.want)
+			}
+		})
+	}
 }
 
 func flattenCoreSymbols(symbols []core.SymbolNode) []core.Symbol {
@@ -280,6 +294,18 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Selected extends (a < b ? A : B)",
 		},
 		{
+			name:   "nested generic heritage expression",
+			source: "class Nested extends Base<Outer<Inner>, Pair<A, B>> {}",
+			symbol: core.Symbol{Name: "Nested", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 54}}},
+			want:   "class Nested extends Base<Outer<Inner>, Pair<A, B>>",
+		},
+		{
+			name:   "tuple heritage expression",
+			source: "class Tupled extends choose([Base, Other]) {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 45}}},
+			want:   "class Tupled extends choose([Base, Other])",
+		},
+		{
 			name:   "reserved-word heritage property",
 			source: "class Selected extends constructors.new {}",
 			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
@@ -372,6 +398,26 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "duplicate generic separator in expression",
 			source: "class Broken extends choose(Base<A,, B>) {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+		},
+		{
+			name:   "missing first generic operand",
+			source: "class Broken extends A<, A> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "missing generic constraint operand",
+			source: "class Broken<T extends, A> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 29}}},
+		},
+		{
+			name:   "duplicate call operand separator",
+			source: "class Broken extends choose(A,, A) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
+		{
+			name:   "duplicate object member separator",
+			source: "class Broken<T extends { first: A,, second: A }> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 51}}},
 		},
 	}
 
