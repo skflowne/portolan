@@ -237,6 +237,9 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			}
 			last = "value"
 		case ',', '?', ':', '=', '&', '|', '.':
+			if source[i] == ',' && last == "," {
+				return 0, false, nil
+			}
 			last = string(source[i])
 		default:
 			r, _ := utf8.DecodeRuneInString(source[i:end])
