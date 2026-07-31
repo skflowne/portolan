@@ -36,7 +36,8 @@ Allowed production dependencies and stable ownership:
 | `internal/pathnorm` | Canonical host-path identity and file-URI conversion | standard library |
 | `internal/lsp` | LSP JSON-RPC, transport, provider adaptation | `internal/core`, `internal/pathnorm` |
 | `internal/telemetry` | JSONL, OTel, composed sinks | `internal/core` |
-| `internal/tools` | Tool behavior and shared call policy | `internal/core`, `internal/pathnorm` |
+| `internal/tools` | Tool behavior and shared call policy | `internal/core`, `internal/pathnorm`, `internal/tools/render` |
+| `internal/tools/render` | Compact-text projection of canonical atoms for tool assemblers | `internal/core` |
 | `internal/mcp` | MCP adaptation and control-socket lifecycle | `internal/core`, `internal/tools` |
 | `cmd/portoland` | Concrete wiring | internal packages as composition requires |
 | `eval/testinfra` | Real-daemon startup and teardown for evals | test infrastructure only |

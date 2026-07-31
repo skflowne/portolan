@@ -7,6 +7,14 @@
     "truncated": false,
     "freshness": {"generation": 0, "stale": false}
   },
+  "definition_radius": {
+    "found": true,
+    "locations": [
+      {"file": "src/geometry.ts", "range": {"start": {"line": 8, "character": 30}, "end": {"line": 8, "character": 36}}}
+    ],
+    "truncated": false,
+    "freshness": {"generation": 0, "stale": false}
+  },
   "references_circle": {
     "found": true,
     "locations": [
@@ -21,6 +29,7 @@
   "telemetry": [
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 13, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_references", "session_id": "tiera", "graph_mode": "graph", "result_size": 4, "truncated": false, "generation": 0, "stale": false},
+    {"tool": "find_definition", "session_id": "tiera", "graph_mode": "graph", "result_size": 1, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_definition", "session_id": "tiera", "graph_mode": "graph", "result_size": 1, "truncated": false, "generation": 0, "stale": false},
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 7, "truncated": false, "generation": 0, "stale": false},
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 0, "truncated": false, "generation": 0, "stale": false},

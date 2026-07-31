@@ -62,8 +62,11 @@ The complete production query call graph through `LanguageProvider` is:
 | `internal/tools/find_references.go` | `DocumentSymbols` for name-to-position resolution | `References` with `includeDeclaration=true` |
 | `internal/tools/get_outline.go` | `DocumentSymbols` for structure | `SymbolSignatures` for retained symbols |
 
-No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the typed tool methods,
-and the MCP SDK derives schemas from their canonical input and output types.
+No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the typed tool methods.
+The MCP SDK derives schemas from the canonical input types of all three and from the output types of
+`find_definition` and `find_references`; `get_outline` registers an untyped output value, advertises no
+output schema, and answers with the compact text `internal/tools`'"'"'s renderer assembles from the same
+canonical result.
 
 Tests use the same seam through `core.StubProvider` and focused test providers in
 `internal/tools/tools_test.go` and `internal/tools/operation_budget_test.go`. Direct production
@@ -91,7 +94,8 @@ method, function, anonymous-callback hierarchy, unknown kinds, and complete cano
 canonical escaped paths, and concurrent queries against the real pinned language server.
 `internal/tools` tests cover name resolution, caps, retained-symbol enrichment, honest-empty
 results, soft errors, and the shared operation budget. `internal/mcp/server_test.go` checks typed MCP
-round trips, while `eval/tiera` checks the final real-daemon structured contract. Transport framing,
+round trips, while `eval/tiera` checks the final real-daemon contract: the structured output of
+`find_definition` and `find_references`, and `get_outline`'"'"'s exact agent-facing text. Transport framing,
 pending-response, cancellation, and shutdown behavior has separate owner-level tests under
 `internal/lsp`.
 

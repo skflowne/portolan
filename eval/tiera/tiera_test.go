@@ -160,6 +160,9 @@ func TestTierA(t *testing.T) {
 	assertOutlineText(t, daemon.sess, geometry, "outline_geometry")
 	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, expectedStructuredOutput(t, want, "references_circle"), &got.ReferencesCircle)
 	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, expectedStructuredOutput(t, want, "definition_total_area"), &got.DefinitionTotalArea)
+	// A parameter property's selection range is a nested, non-top-level one:
+	// the position every member navigation is issued at.
+	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "radius"}, expectedStructuredOutput(t, want, "definition_radius"), &got.DefinitionRadius)
 	assertOutlineText(t, daemon.sess, mainTS, "outline_main")
 	assertOutlineText(t, daemon.sess, emptyTS, "outline_empty")
 	assertOutlineText(t, daemon.sess, "relative.ts", "outline_invalid_file")
