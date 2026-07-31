@@ -10,3 +10,5 @@ class DuplicateCallOperand extends choose(A,, A) {}
 class DuplicateObjectSeparator<T extends { first: A,, second: A }> {}
 class RepeatedUnion<T extends A | | B> {}
 class RepeatedIntersection<T extends A & & B> {}
+class MixedUnionIntersection<T extends A | & B> {}
+class MixedIntersectionUnion<T extends A & | B> {}
