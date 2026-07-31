@@ -474,6 +474,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 62}}},
 		},
 		{
+			name:   "incomplete conditional-like generic default without extends",
+			source: "class Broken<T = A ? B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
+		{
+			name:   "incomplete conditional-like generic constraint without condition",
+			source: "class Broken<T extends A ? B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
 			name:   "incomplete conditional generic default missing colon",
 			source: "class Broken<T = A extends B ? C> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},

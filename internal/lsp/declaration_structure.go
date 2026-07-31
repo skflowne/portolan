@@ -193,7 +193,7 @@ func (s *declarationStructure) markQuestion() bool {
 		s.markGenericCandidateInvalid()
 		return true
 	}
-	if incompleteDeclarationToken(current.last) {
+	if current.typeContext && current.genericPurpose != declarationGenericCandidate || incompleteDeclarationToken(current.last) {
 		return false
 	}
 	current.last = "?"
