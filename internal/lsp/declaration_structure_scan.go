@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"context"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -23,7 +22,7 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			if !complete {
 				return 0, false, nil
 			}
-			if kind == lexicalSpanLiteral && !structure.markValue(false) {
+			if kind == lexicalSpanLiteral && structure.transition(declarationValue) == declarationTransitionRejected {
 				return 0, false, nil
 			}
 			i = next
@@ -32,69 +31,36 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 		if source[i] == '/' {
 			return 0, false, nil
 		}
-		if keyword, ok := declarationKeywordAt(source, i, end); ok {
-			if !structure.markKeyword(keyword) {
+		if token, tokenEnd, ok := declarationRecognizedTokenAt(source, i, end); ok {
+			switch structure.transition(token) {
+			case declarationTransitionRejected:
 				return 0, false, nil
+			case declarationTransitionBody:
+				return i, true, nil
 			}
-			i += len(keyword)
+			i = tokenEnd
 			continue
 		}
 
-		accepted := true
-		switch source[i] {
-		case '(':
-			accepted = structure.open(declarationParen, "(")
-		case ')':
-			accepted = structure.close(declarationParen)
-		case '[':
-			accepted = structure.open(declarationBracket, "[")
-		case ']':
-			accepted = structure.close(declarationBracket)
-		case '<':
-			accepted = structure.openGeneric()
-		case '>':
-			accepted = structure.markGreaterThan()
-		case '{':
-			if structure.atRoot() {
-				if structure.canOpenBody() {
-					return i, true, nil
-				}
-				return 0, false, nil
-			}
-			accepted = structure.open(declarationBrace, "{")
-		case '}':
-			accepted = structure.close(declarationBrace)
-		case ';':
-			if structure.atRoot() {
-				return 0, false, nil
-			}
-			accepted = structure.markValue(false)
-		case ',':
-			accepted = structure.acceptSeparator()
-		case '?':
-			accepted = structure.markQuestion()
-		case ':':
-			accepted = structure.markColon()
-		case '=':
-			if i+1 < end && source[i+1] == '>' {
-				accepted = structure.markOperator("=>")
-				i++
-			} else {
-				accepted = structure.markOperator("=")
-			}
-		case '&', '|', '.':
-			accepted = structure.markOperator(string(source[i]))
-		default:
-			r, _ := utf8.DecodeRuneInString(source[i:end])
-			if !unicode.IsSpace(r) {
-				tokenStart := isIdentifierByte(source[i]) && (i == start || !isIdentifierByte(source[i-1]))
-				accepted = structure.markValue(tokenStart)
-			}
+		r, size := utf8.DecodeRuneInString(source[i:end])
+		if unicode.IsSpace(r) {
+			i += size
+			continue
 		}
-		if !accepted {
+		if isIdentifierByte(source[i]) {
+			next = i + 1
+			for next < end && isIdentifierByte(source[next]) {
+				next++
+			}
+			if structure.transition(declarationValue) == declarationTransitionRejected {
+				return 0, false, nil
+			}
+			i = next
+			continue
+		}
+		if structure.transition(declarationContinuation) == declarationTransitionRejected {
 			return 0, false, nil
 		}
-		_, size := utf8.DecodeRuneInString(source[i:end])
 		if size == 0 {
 			break
 		}
@@ -104,13 +70,4 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 		return 0, false, err
 	}
 	return 0, false, nil
-}
-
-func declarationKeywordAt(source string, start, end int) (string, bool) {
-	for _, keyword := range []string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"} {
-		if strings.HasPrefix(source[start:end], keyword) && tokenBoundary(source, start, keyword) {
-			return keyword, true
-		}
-	}
-	return "", false
 }

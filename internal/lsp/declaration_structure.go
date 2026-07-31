@@ -48,7 +48,7 @@ const (
 
 type declarationContext struct {
 	kind             declarationContextKind
-	last             string
+	last             declarationToken
 	typeContext      bool
 	conditionals     []declarationConditionalStage
 	genericPurpose   declarationGenericPurpose
@@ -66,7 +66,7 @@ type declarationStructure struct {
 
 func newDeclarationStructure(kind core.SymbolKind) declarationStructure {
 	return declarationStructure{
-		contexts:   []declarationContext{{kind: declarationRoot, last: "value"}},
+		contexts:   []declarationContext{{kind: declarationRoot, last: declarationValue}},
 		symbolKind: kind,
 	}
 }
@@ -79,8 +79,8 @@ func (s *declarationStructure) atRoot() bool {
 	return len(s.contexts) == 1
 }
 
-func (s *declarationStructure) open(kind declarationContextKind, token string) bool {
-	if s.current().last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
+func (s *declarationStructure) open(kind declarationContextKind, token declarationToken) bool {
+	if s.current().last == declarationPendingArrow || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	s.contexts = append(s.contexts, declarationContext{
@@ -95,7 +95,7 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 			return false
 		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
-		if !s.markValue(false) {
+		if !s.completeValue() {
 			return false
 		}
 	}
@@ -103,23 +103,13 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 		return false
 	}
 	requiresArrow := s.current().requiresArrow ||
-		s.current().kind == declarationParen && s.current().typeContext && s.current().last == "("
+		s.current().kind == declarationParen && s.current().typeContext && s.current().last == declarationOpenParen
 	s.contexts = s.contexts[:len(s.contexts)-1]
 	if requiresArrow {
-		s.current().last = "pendingArrow"
+		s.current().last = declarationPendingArrow
 		return true
 	}
-	return s.markValue(false)
-}
-func (s *declarationStructure) markValue(tokenStart bool) bool {
-	current := s.current()
-	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() ||
-		tokenStart && s.atRoot() && current.last == "value" {
-		return false
-	}
-	current.completeConditionalValue()
-	current.last = "value"
-	return true
+	return s.completeValue()
 }
 
 func (c *declarationContext) completeConditionalValue() {
@@ -142,76 +132,76 @@ func (c *declarationContext) reduceCompletedConditionals() {
 	}
 }
 
-func (s *declarationStructure) markKeyword(keyword string) bool {
+func (s *declarationStructure) markKeyword(token declarationToken) bool {
 	current := s.current()
-	if current.last == "pendingArrow" {
+	if current.last == declarationPendingArrow {
 		return false
 	}
-	if current.last == "." {
-		return s.markValue(false)
+	if current.last == declarationDot {
+		return s.completeValue()
 	}
 	if s.atRoot() {
-		return s.acceptHeritageKeyword(keyword)
+		return s.acceptHeritageKeyword(token)
 	}
-	if keyword == "extends" && current.typeContext && current.last == "value" {
+	if token == declarationExtends && current.typeContext && current.last == declarationValue {
 		if current.genericPurpose == declarationGenericParameters && current.parameterStage == declarationParameterName {
 			current.parameterStage = declarationParameterConstraint
-			current.last = keyword
+			current.last = token
 			return true
 		}
 		current.conditionals = append(current.conditionals, declarationConditionalCondition)
-		current.last = keyword
+		current.last = token
 		return true
 	}
-	current.last = keyword
+	current.last = token
 	return true
 }
 
-func (s *declarationStructure) acceptHeritageKeyword(keyword string) bool {
+func (s *declarationStructure) acceptHeritageKeyword(token declarationToken) bool {
 	root := s.current()
-	switch keyword {
-	case "extends":
+	switch token {
+	case declarationExtends:
 		if s.heritage != declarationBeforeHeritage {
 			return false
 		}
 		s.heritage = declarationExtendsHeritage
-	case "implements":
+	case declarationImplements:
 		if s.symbolKind != core.SymbolKindClass || s.heritage == declarationImplementsHeritage ||
-			s.heritage == declarationExtendsHeritage && incompleteDeclarationToken(root.last) {
+			s.heritage == declarationExtendsHeritage && !root.last.metadata().terminalComplete {
 			return false
 		}
 		s.heritage = declarationImplementsHeritage
 	default:
 		return false
 	}
-	root.last = keyword
+	root.last = token
 	return true
 }
 
 func (s *declarationStructure) markQuestion() bool {
 	current := s.current()
-	if current.typeContext && current.last == "value" && len(current.conditionals) > 0 {
+	if current.typeContext && current.last == declarationValue && len(current.conditionals) > 0 {
 		last := len(current.conditionals) - 1
 		if current.conditionals[last] == declarationConditionalCondition {
 			current.conditionals[last] = declarationConditionalTrue
-			current.last = "?"
+			current.last = declarationQuestion
 			return true
 		}
 	}
-	if current.typeContext && current.last == "value" &&
+	if current.typeContext && current.last == declarationValue &&
 		(current.kind == declarationBracket || current.kind == declarationBrace) {
 		s.markGenericCandidateInvalid()
 		return true
 	}
-	if current.typeContext && current.last == "value" && current.kind == declarationParen {
+	if current.typeContext && current.last == declarationValue && current.kind == declarationParen {
 		current.requiresArrow = true
-		current.last = "optional"
+		current.last = declarationOptional
 		return true
 	}
-	if current.typeContext && current.genericPurpose != declarationGenericCandidate || incompleteDeclarationToken(current.last) {
+	if current.typeContext && current.genericPurpose != declarationGenericCandidate || current.last.metadata().requiresOperand {
 		return false
 	}
-	current.last = "?"
+	current.last = declarationQuestion
 	return true
 }
 
@@ -226,8 +216,8 @@ func (s *declarationStructure) markGenericCandidateInvalid() {
 
 func (s *declarationStructure) markColon() bool {
 	current := s.current()
-	if current.last == "optional" {
-		current.last = ":"
+	if current.last == declarationOptional {
+		current.last = declarationColon
 		return true
 	}
 	current.reduceCompletedConditionals()
@@ -238,30 +228,31 @@ func (s *declarationStructure) markColon() bool {
 			return false
 		}
 		current.conditionals[last] = declarationConditionalFalse
-	} else if incompleteDeclarationToken(current.last) {
+	} else if current.last.metadata().requiresOperand {
 		return false
 	}
 	if !conditional && current.kind == declarationParen && current.typeContext {
 		current.requiresArrow = true
 	}
-	current.last = ":"
+	current.last = declarationColon
 	return true
 }
 
-func (s *declarationStructure) markOperator(token string) bool {
+func (s *declarationStructure) markOperator(token declarationToken) bool {
 	current := s.current()
-	if current.last == "pendingArrow" {
-		if token != "=>" {
+	if current.last == declarationPendingArrow {
+		if token != declarationArrow {
 			return false
 		}
 		current.last = token
 		return true
 	}
-	if (current.last == "&" || current.last == "|") && (token == "&" || token == "|") {
+	if (current.last == declarationIntersection || current.last == declarationUnion) &&
+		(token == declarationIntersection || token == declarationUnion) {
 		return false
 	}
-	if token == "=" && current.genericPurpose == declarationGenericParameters {
-		if current.parameterStage == declarationParameterDefault || incompleteDeclarationToken(current.last) {
+	if token == declarationEqual && current.genericPurpose == declarationGenericParameters {
+		if current.parameterStage == declarationParameterDefault || current.last.metadata().requiresOperand {
 			return false
 		}
 		current.parameterStage = declarationParameterDefault
@@ -277,23 +268,23 @@ func (s *declarationStructure) openGeneric() bool {
 	case s.atRoot() && s.heritage == declarationBeforeHeritage && !s.genericSeen:
 		purpose = declarationGenericParameters
 		s.genericSeen = true
-	case s.atRoot() && s.inHeritageOperand() && current.last == "value":
+	case s.atRoot() && s.inHeritageOperand() && current.last == declarationValue:
 	case current.kind == declarationGeneric:
-	case current.last == "value" && current.typeContext:
-	case current.last == "value":
+	case current.last == declarationValue && current.typeContext:
+	case current.last == declarationValue:
 		purpose = declarationGenericCandidate
 	default:
 		return false
 	}
 	s.contexts = append(s.contexts, declarationContext{
-		kind: declarationGeneric, last: "<", typeContext: true, genericPurpose: purpose,
+		kind: declarationGeneric, last: declarationOpenGeneric, typeContext: true, genericPurpose: purpose,
 	})
 	return true
 }
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
-	if current.last == "pendingArrow" {
+	if current.last == declarationPendingArrow {
 		return false
 	}
 	current.reduceCompletedConditionals()
@@ -301,16 +292,16 @@ func (s *declarationStructure) acceptSeparator() bool {
 		return false
 	}
 	if s.atRoot() {
-		if !s.heritageAllowsList() || incompleteDeclarationToken(current.last) {
+		if !s.heritageAllowsList() || !current.last.metadata().terminalComplete {
 			return false
 		}
-		current.last = ","
+		current.last = declarationComma
 		return true
 	}
 	if current.requiresListOperand() && !current.hasListOperand() {
 		return false
 	}
-	current.last = ","
+	current.last = declarationComma
 	if current.genericPurpose == declarationGenericParameters {
 		current.parameterStage = declarationParameterName
 	}
@@ -331,7 +322,7 @@ func (c *declarationContext) requiresListOperand() bool {
 }
 
 func (c *declarationContext) hasListOperand() bool {
-	return c.last != "," && !incompleteDeclarationToken(c.last)
+	return c.last != declarationComma && !c.last.metadata().requiresOperand
 }
 
 func (c *declarationContext) canClose() bool {
@@ -339,27 +330,27 @@ func (c *declarationContext) canClose() bool {
 	if len(c.conditionals) != 0 {
 		return false
 	}
-	if c.last == "," {
+	if c.last == declarationComma || c.last == declarationSemicolon {
 		return true
 	}
 	if c.last == contextOpeningToken(c.kind) {
 		return c.kind != declarationGeneric
 	}
-	return !incompleteDeclarationToken(c.last)
+	return c.last.metadata().terminalComplete
 }
 
-func contextOpeningToken(kind declarationContextKind) string {
+func contextOpeningToken(kind declarationContextKind) declarationToken {
 	switch kind {
 	case declarationGeneric:
-		return "<"
+		return declarationOpenGeneric
 	case declarationParen:
-		return "("
+		return declarationOpenParen
 	case declarationBracket:
-		return "["
+		return declarationOpenBracket
 	case declarationBrace:
-		return "{"
+		return declarationOpenBrace
 	default:
-		return ""
+		return declarationValue
 	}
 }
 
@@ -378,22 +369,12 @@ func (s *declarationStructure) closeGeneric() bool {
 	purpose := current.genericPurpose
 	s.contexts = s.contexts[:len(s.contexts)-1]
 	if s.atRoot() && purpose == declarationGenericParameters {
-		s.current().last = "value"
+		s.current().last = declarationValue
 		return true
 	}
-	return s.markValue(false)
+	return s.completeValue()
 }
 
 func (s *declarationStructure) canOpenBody() bool {
-	return s.atRoot() && !incompleteDeclarationToken(s.current().last)
-}
-
-func incompleteDeclarationToken(token string) bool {
-	switch token {
-	case "extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract",
-		"(", "[", "{", "<", ",", "?", "optional", "pendingArrow", ":", "=", "=>", "&", "|", ".":
-		return true
-	default:
-		return false
-	}
+	return s.atRoot() && s.current().last.metadata().terminalComplete
 }
