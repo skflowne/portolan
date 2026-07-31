@@ -37,7 +37,7 @@ func (s *declarationStructure) transition(token declarationToken) declarationTra
 	case declarationValue, declarationContinuation:
 		accepted = s.markValue(token)
 	case declarationExtends, declarationImplements, declarationKeyof, declarationTypeof,
-		declarationInfer, declarationReadonly, declarationNew, declarationAbstract:
+		declarationInfer, declarationIn, declarationReadonly, declarationNew, declarationAbstract:
 		accepted = s.markKeyword(token)
 	case declarationOpenParen:
 		accepted = s.open(declarationParen, token)

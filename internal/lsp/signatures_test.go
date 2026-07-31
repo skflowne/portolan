@@ -294,6 +294,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Registry<T extends { value: string; nested: { count: number } }> extends Base<T>",
 		},
 		{
+			name:   "mapped object type",
+			source: "class Mapped<T extends { [K in keyof Source]: Source[K] }> {}",
+			symbol: core.Symbol{Name: "Mapped", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 61}}},
+			want:   "class Mapped<T extends { [K in keyof Source]: Source[K] }>",
+		},
+		{
 			name: "comments and literal braces are not body openers",
 			source: "export /* modifier */ class Tagged<T extends { open: \"{\"; close: `}`; }>\n" +
 				"/* clause */ extends Base<T> {\n  body = \"implements Wrong\";\n}",
