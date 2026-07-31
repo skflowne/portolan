@@ -257,7 +257,7 @@ func (s *declarationStructure) markOperator(token string) bool {
 		current.last = token
 		return true
 	}
-	if declarationBinaryTypeOperator(token) && declarationBinaryTypeOperator(current.last) {
+	if (current.last == "&" || current.last == "|") && (token == "&" || token == "|") {
 		return false
 	}
 	if token == "=" && current.genericPurpose == declarationGenericParameters {
@@ -386,10 +386,6 @@ func (s *declarationStructure) closeGeneric() bool {
 
 func (s *declarationStructure) canOpenBody() bool {
 	return s.atRoot() && !incompleteDeclarationToken(s.current().last)
-}
-
-func declarationBinaryTypeOperator(token string) bool {
-	return token == "&" || token == "|"
 }
 
 func incompleteDeclarationToken(token string) bool {
