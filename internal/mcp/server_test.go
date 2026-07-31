@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,24 +43,21 @@ func testTools(t *testing.T) *tools.Tools {
 	return tools.New(provider, &core.GenerationCounter{}, core.NopLogger{}, core.Config{SessionID: "test", GraphMode: "graph"})
 }
 
-// TestNewServer_ConstructsAndRegistersTools asserts the server builds without
-// error and lists exactly the three expected tools.
-func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
-	srv := NewServer(testTools(t))
-	if srv == nil {
-		t.Fatal("expected non-nil server")
-	}
-
+// listServerTools serves srv over the in-memory transport and returns the
+// tools an MCP client actually sees, including the descriptions shipped to it.
+func listServerTools(t *testing.T, srv *sdk.Server) []*sdk.Tool {
+	t.Helper()
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	serverSessionCh := make(chan *sdk.ServerSession, 1)
 	go func() {
 		ss, err := srv.Connect(ctx, serverTransport, nil)
 		if err != nil {
 			t.Errorf("server connect: %v", err)
+			close(serverSessionCh)
 			return
 		}
 		serverSessionCh <- ss
@@ -70,18 +68,32 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
-	defer cs.Close()
+	t.Cleanup(func() { cs.Close() })
 
-	ss := <-serverSessionCh
-	defer ss.Close()
+	ss, ok := <-serverSessionCh
+	if !ok {
+		t.Fatal("server session unavailable")
+	}
+	t.Cleanup(func() { ss.Close() })
 
 	listRes, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
+	return listRes.Tools
+}
+
+// TestNewServer_ConstructsAndRegistersTools asserts the server builds without
+// error and lists exactly the three expected tools.
+func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
+	srv := NewServer(testTools(t))
+	if srv == nil {
+		t.Fatal("expected non-nil server")
+	}
+
 	names := map[string]bool{}
 	var outline *sdk.Tool
-	for _, tool := range listRes.Tools {
+	for _, tool := range listServerTools(t, srv) {
 		names[tool.Name] = true
 		if tool.Description == "" {
 			t.Errorf("tool %s has empty description", tool.Name)
@@ -105,6 +117,120 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 	if outline.OutputSchema != nil {
 		t.Fatalf("get_outline advertises an output schema for a text-only response: %+v", outline.OutputSchema)
+	}
+}
+
+// grammarToken returns the backticked token the get_outline description
+// advertises right after lead, so the grammar assertions read the shipped
+// description instead of restating it.
+func grammarToken(t *testing.T, description, lead string) string {
+	t.Helper()
+	_, after, ok := strings.Cut(description, lead+"`")
+	if !ok {
+		t.Fatalf("get_outline description no longer states %q: %q", lead, description)
+	}
+	token, _, ok := strings.Cut(after, "`")
+	if !ok {
+		t.Fatalf("get_outline description leaves the token after %q unterminated: %q", lead, description)
+	}
+	return token
+}
+
+func outlineSymbol(depth int, signature string, startLine, endLine int) tools.OutlineSymbol {
+	return tools.OutlineSymbol{
+		Symbol: core.Symbol{
+			Name:      signature,
+			Kind:      core.SymbolKindUnknown,
+			File:      "/project/src/geometry.ts",
+			Signature: signature,
+			Range: core.Range{
+				Start: core.Position{Line: startLine},
+				End:   core.Position{Line: endLine, Character: 1},
+			},
+		},
+		Depth: depth,
+	}
+}
+
+// TestNewServer_GetOutlineDescriptionMatchesRenderedText bridges the two owners
+// of the get_outline grammar: internal/mcp advertises it and tools.RenderOutline
+// produces it, and the description is the only spec a model has at call time.
+// Each claim is read out of the shipped description and checked against rendered
+// text, so moving either owner alone fails here instead of silently lying to
+// every MCP client.
+func TestNewServer_GetOutlineDescriptionMatchesRenderedText(t *testing.T) {
+	var description string
+	for _, tool := range listServerTools(t, NewServer(testTools(t))) {
+		if tool.Name == "get_outline" {
+			description = tool.Description
+		}
+	}
+	if description == "" {
+		t.Fatal("get_outline tool has no description to bridge")
+	}
+
+	out := tools.GetOutlineOutput{
+		Found: true,
+		File:  "/project/src/geometry.ts",
+		Symbols: []tools.OutlineSymbol{
+			outlineSymbol(0, "interface Shape", 3, 5),
+			outlineSymbol(1, "area(): number", 4, 4),
+			outlineSymbol(0, "class Circle implements Shape", 7, 13),
+			outlineSymbol(0, "const origin: Point", 15, 15),
+		},
+	}
+	rendered := tools.RenderOutline(out)
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < len(out.Symbols)+4 {
+		t.Fatalf("rendered outline is too short to carry the advertised grammar: %q", rendered)
+	}
+
+	wantHeader := strings.ReplaceAll(grammarToken(t, description, "Line 1 is "), "<path>", out.File)
+	if !strings.HasPrefix(rendered, wantHeader+"\n") {
+		t.Errorf("description advertises line 1 as %q, rendered line 1 is %q", wantHeader, lines[0])
+	}
+	if want := grammarToken(t, description, "line 2 is "); lines[1] != want {
+		t.Errorf("description advertises line 2 as %q, rendered line 2 is %q", want, lines[1])
+	}
+
+	const headerRule = "A blank line closes the header"
+	if !strings.Contains(description, headerRule) {
+		t.Fatalf("description no longer states %q: %q", headerRule, description)
+	}
+	if lines[2] != "" {
+		t.Errorf("%s, but rendered line 3 is %q", headerRule, lines[2])
+	}
+
+	const footerRule = "After a final blank line the last line is"
+	wantFooter := strings.Replace(grammarToken(t, description, footerRule+" "), "N", strconv.Itoa(len(out.Symbols)), 1)
+	if got := lines[len(lines)-1]; got != wantFooter {
+		t.Errorf("description advertises the last line as %q, rendered last line is %q", wantFooter, got)
+	}
+	if lines[len(lines)-2] != "" {
+		t.Errorf("%s %q, but the line before it is %q", footerRule, wantFooter, lines[len(lines)-2])
+	}
+
+	const nestingRule = "Within that list a blank line precedes a top-level symbol that follows a nested one"
+	if !strings.Contains(description, nestingRule) {
+		t.Fatalf("description no longer states %q: %q", nestingRule, description)
+	}
+	body := lines[3 : len(lines)-2]
+	symbol := 0
+	for i, line := range body {
+		if line == "" {
+			continue
+		}
+		if symbol >= len(out.Symbols) {
+			t.Fatalf("rendered outline carries more symbol lines than symbols: %q", rendered)
+		}
+		wantBlank := symbol > 0 && out.Symbols[symbol].Depth == 0 && out.Symbols[symbol-1].Depth > 0
+		if gotBlank := i > 0 && body[i-1] == ""; gotBlank != wantBlank {
+			t.Errorf("%s: symbol line %q preceded by blank line = %v, want %v", nestingRule, line, gotBlank, wantBlank)
+		}
+		symbol++
+	}
+	if symbol != len(out.Symbols) {
+		t.Errorf("rendered outline carries %d symbol lines for %d symbols: %q", symbol, len(out.Symbols), rendered)
 	}
 }
 
