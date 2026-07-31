@@ -108,8 +108,8 @@ type Symbol struct {
 	File      string     `json:"file"`
 	Range     Range      `json:"range"`
 	SelRange  Range      `json:"selRange"`
-	Signature string     `json:"signature,omitempty" jsonschema:"compact provider-authoritative declaration or type summary; omitted when unavailable"`
-	Detail    string     `json:"detail,omitempty" jsonschema:"provider document-symbol detail, independent of signature; omitted when unavailable"`
+	Signature string     `json:"signature,omitempty"`
+	Detail    string     `json:"detail,omitempty"`
 }
 
 // SymbolNode owns outline hierarchy separately from canonical Symbol identity.
