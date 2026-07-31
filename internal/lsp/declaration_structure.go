@@ -363,6 +363,13 @@ func contextOpeningToken(kind declarationContextKind) string {
 	}
 }
 
+func (s *declarationStructure) markGreaterThan() bool {
+	if s.current().kind == declarationGeneric {
+		return s.closeGeneric()
+	}
+	return !s.atRoot()
+}
+
 func (s *declarationStructure) closeGeneric() bool {
 	current := s.current()
 	if current.kind != declarationGeneric || !current.canClose() {

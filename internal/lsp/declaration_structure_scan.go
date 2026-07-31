@@ -53,11 +53,7 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 		case '<':
 			accepted = structure.openGeneric()
 		case '>':
-			if structure.current().kind == declarationGeneric {
-				accepted = structure.closeGeneric()
-			} else if structure.atRoot() {
-				accepted = false
-			}
+			accepted = structure.markGreaterThan()
 		case '{':
 			if structure.atRoot() {
 				if structure.canOpenBody() {
