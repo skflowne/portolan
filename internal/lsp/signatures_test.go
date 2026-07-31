@@ -114,6 +114,9 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		{name: "MixedIntersectionUnion", want: "class MixedIntersectionUnion<T extends any>"},
 		{name: "MissingInterfaceSeparator", want: "interface MissingInterfaceSeparator"},
 		{name: "MissingClassSeparator", want: "class MissingClassSeparator"},
+		{name: "GenericAdjacency", want: "class GenericAdjacency<T, U>"},
+		{name: "ParenthesizedAdjacency", want: "class ParenthesizedAdjacency"},
+		{name: "NestedGenericAdjacency", want: "class NestedGenericAdjacency"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,6 +469,26 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 		{
 			name:   "adjacent intersection and union operators",
 			source: "class Broken<T extends A & | B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent generic parameters",
+			source: "class GenericAdjacency<T U> {}",
+			symbol: core.Symbol{Name: "GenericAdjacency", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "adjacent parenthesized operands",
+			source: "class Broken extends factory(A B) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+		},
+		{
+			name:   "adjacent nested generic operands",
+			source: "class Broken extends A<B C> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 30}}},
+		},
+		{
+			name:   "adjacent literal operands",
+			source: "class Broken<T extends \"a\" \"b\"> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
 		},
 		{

@@ -14,3 +14,6 @@ class MixedUnionIntersection<T extends A | & B> {}
 class MixedIntersectionUnion<T extends A & | B> {}
 interface MissingInterfaceSeparator extends A B {}
 class MissingClassSeparator implements A B {}
+class GenericAdjacency<T U> {}
+class ParenthesizedAdjacency extends factory(A B) {}
+class NestedGenericAdjacency extends A<B C> {}

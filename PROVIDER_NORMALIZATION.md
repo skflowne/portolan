@@ -45,12 +45,14 @@ canonical paths, and hover presentation wrappers become compact plain strings be
   references, and document-symbol request orchestration.
 - `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
   `internal/lsp/declaration_headers.go` owns retained-range and name validation plus lexical-span
-  classification, trivia removal, and whitespace normalization; `internal/lsp/declaration_structure.go`
-  owns every request-local validity transition, including operators, pending function arrows,
-  generic purposes, conditional stages, class/interface heritage phases, operands, separators, and
-  closure; `internal/lsp/declaration_structure_scan.go` classifies source tokens, communicates
-  lexical token starts while dispatching them to that owner, locates the outer-body boundary, and
-  rejects slash-ambiguous headers; and
+  classification, trivia removal, and whitespace normalization; `internal/lsp/declaration_tokens.go`
+  owns recognized token metadata, including lexical boundaries, operand requirements, and terminal
+  completeness; `internal/lsp/declaration_structure.go` and
+  `internal/lsp/declaration_structure_transition.go` own every request-local validity transition,
+  including operators, pending function arrows, generic purposes, conditional stages,
+  class/interface heritage phases, operands, separators, and closure;
+  `internal/lsp/declaration_structure_scan.go` classifies lexical spans and dispatches their token
+  categories to that owner, locates the outer-body boundary, and rejects slash-ambiguous headers; and
   `internal/lsp/hover_conversion.go` owns hover decoding
   and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
@@ -183,9 +185,10 @@ modifiers and lexical trivia, preserves literals and non-trivia source such as v
 `extends`/`implements` text, and collapses syntactic whitespace. One request-local
 `declarationStructure` owns every token's validity effect, including operator and pending-arrow
 transitions, conditional completeness, generic purpose and relational ambiguity, legal
-class/interface heritage phases, operands, separators, and closure. The scanner only classifies and
-dispatches tokens, accepts the outer-body boundary when that owner reports a complete state, and
-conservatively rejects ambiguous slash syntax.
+class/interface heritage phases, operands, separators, and closure. Its recognized-token metadata
+owns lexical boundaries, operand requirements, and terminal completeness. The scanner only
+classifies and dispatches lexical spans, accepts the outer-body boundary when that owner reports a
+complete state, and conservatively rejects ambiguous slash syntax.
 Anonymous, mismatched, lexically incomplete, structurally malformed, slash-ambiguous, or otherwise
 unrecognized headers remain on the existing hover path; extraction never returns a partial source
 header. Some synthetic bodyless declarations are also summarized directly from the
