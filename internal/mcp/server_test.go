@@ -120,20 +120,40 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 }
 
-// grammarToken returns the backticked token the get_outline description
-// advertises right after lead, so the grammar assertions read the shipped
-// description instead of restating it.
-func grammarToken(t *testing.T, description, lead string) string {
+// grammarTokens returns the backticked tokens in the description paragraph
+// after lead, so grammar assertions read the claims shipped to MCP clients.
+func grammarTokens(t *testing.T, description, lead string) []string {
 	t.Helper()
-	_, after, ok := strings.Cut(description, lead+"`")
+	_, paragraph, ok := strings.Cut(description, lead)
 	if !ok {
 		t.Fatalf("get_outline description no longer states %q: %q", lead, description)
 	}
-	token, _, ok := strings.Cut(after, "`")
-	if !ok {
-		t.Fatalf("get_outline description leaves the token after %q unterminated: %q", lead, description)
+	if before, _, found := strings.Cut(paragraph, "\n\n"); found {
+		paragraph = before
 	}
-	return token
+
+	var tokens []string
+	for {
+		_, after, found := strings.Cut(paragraph, "`")
+		if !found {
+			break
+		}
+		token, rest, terminated := strings.Cut(after, "`")
+		if !terminated {
+			t.Fatalf("get_outline description leaves a token after %q unterminated: %q", lead, description)
+		}
+		tokens = append(tokens, token)
+		paragraph = rest
+	}
+	if len(tokens) == 0 {
+		t.Fatalf("get_outline description states no grammar tokens after %q: %q", lead, description)
+	}
+	return tokens
+}
+
+func grammarToken(t *testing.T, description, lead string) string {
+	t.Helper()
+	return grammarTokens(t, description, lead)[0]
 }
 
 func outlineSymbol(depth int, signature string, startLine, endLine int) tools.OutlineSymbol {
@@ -202,12 +222,40 @@ func TestNewServer_GetOutlineDescriptionMatchesRenderedText(t *testing.T) {
 	}
 
 	const footerRule = "After a final blank line the last line is"
-	wantFooter := strings.Replace(grammarToken(t, description, footerRule+" "), "N", strconv.Itoa(len(out.Symbols)), 1)
-	if got := lines[len(lines)-1]; got != wantFooter {
-		t.Errorf("description advertises the last line as %q, rendered last line is %q", wantFooter, got)
+	advertisedFooters := grammarTokens(t, description, footerRule)
+	footerCases := []struct {
+		name        string
+		symbolCount int
+		truncated   bool
+	}{
+		{name: "one symbol complete", symbolCount: 1},
+		{name: "multiple symbols complete", symbolCount: len(out.Symbols)},
+		{name: "one symbol truncated", symbolCount: 1, truncated: true},
+		{name: "multiple symbols truncated", symbolCount: len(out.Symbols), truncated: true},
 	}
-	if lines[len(lines)-2] != "" {
-		t.Errorf("%s %q, but the line before it is %q", footerRule, wantFooter, lines[len(lines)-2])
+	for _, tt := range footerCases {
+		t.Run(tt.name, func(t *testing.T) {
+			footerOut := out
+			footerOut.Symbols = out.Symbols[:tt.symbolCount]
+			footerOut.Truncated = tt.truncated
+			footerLines := strings.Split(tools.RenderOutline(footerOut), "\n")
+			got := footerLines[len(footerLines)-1]
+
+			matched := false
+			for _, token := range advertisedFooters {
+				want := strings.Replace(token, "N", strconv.Itoa(tt.symbolCount), 1)
+				if got == want {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Errorf("rendered footer %q is not among advertised tokens %q", got, advertisedFooters)
+			}
+			if footerLines[len(footerLines)-2] != "" {
+				t.Errorf("%s, but the line before %q is %q", footerRule, got, footerLines[len(footerLines)-2])
+			}
+		})
 	}
 
 	const nestingRule = "Within that list a blank line precedes a top-level symbol that follows a nested one"
