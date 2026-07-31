@@ -328,6 +328,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Defaulted<T = A extends B ? C : D>",
 		},
 		{
+			name:   "optional function generic default",
+			source: "class Handler<T = (value?: string) => void> {}",
+			symbol: core.Symbol{Name: "Handler", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 46}}},
+			want:   "class Handler<T = (value?: string) => void>",
+		},
+		{
 			name:   "conditional tuple operand",
 			source: "class Tupled<T extends [A extends B ? C : D]> {}",
 			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 48}}},
@@ -481,6 +487,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 		{
 			name:   "incomplete conditional-like generic constraint without condition",
 			source: "class Broken<T extends A ? B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
+			name:   "conditional-like parenthesized type default",
+			source: "class Broken<T = (A ? B)> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 28}}},
+		},
+		{
+			name:   "relational candidate inside type default",
+			source: "class Broken<T = (A < B ? C)> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 32}}},
 		},
 		{
