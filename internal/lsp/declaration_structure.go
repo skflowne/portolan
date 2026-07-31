@@ -20,18 +20,18 @@ const (
 type declarationConditionalStage uint8
 
 const (
-	declarationConditionalNone declarationConditionalStage = iota
-	declarationConditionalCondition
+	declarationConditionalCondition declarationConditionalStage = iota + 1
 	declarationConditionalTrue
 	declarationConditionalTrueComplete
 	declarationConditionalFalse
+	declarationConditionalFalseComplete
 )
 
 type declarationContext struct {
-	kind        declarationContextKind
-	last        string
-	typeContext bool
-	conditional declarationConditionalStage
+	kind         declarationContextKind
+	last         string
+	typeContext  bool
+	conditionals []declarationConditionalStage
 	// Expression contexts treat an unmatched generic candidate as a relational operator.
 	tentativeGeneric bool
 }
@@ -73,14 +73,29 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 func (s *declarationStructure) mark(token string) {
 	current := s.current()
 	if token == "value" {
-		switch current.conditional {
-		case declarationConditionalTrue:
-			current.conditional = declarationConditionalTrueComplete
-		case declarationConditionalFalse:
-			current.conditional = declarationConditionalNone
-		}
+		current.completeConditionalValue()
 	}
 	current.last = token
+}
+
+func (c *declarationContext) completeConditionalValue() {
+	if len(c.conditionals) == 0 {
+		return
+	}
+	last := len(c.conditionals) - 1
+	switch c.conditionals[last] {
+	case declarationConditionalTrue:
+		c.conditionals[last] = declarationConditionalTrueComplete
+	case declarationConditionalFalse:
+		c.conditionals[last] = declarationConditionalFalseComplete
+	}
+}
+
+func (c *declarationContext) reduceCompletedConditionals() {
+	for len(c.conditionals) > 0 && c.conditionals[len(c.conditionals)-1] == declarationConditionalFalseComplete {
+		c.conditionals = c.conditionals[:len(c.conditionals)-1]
+		c.completeConditionalValue()
+	}
 }
 
 func (s *declarationStructure) markKeyword(keyword string) {
@@ -90,7 +105,10 @@ func (s *declarationStructure) markKeyword(keyword string) {
 		return
 	}
 	if keyword == "extends" && current.kind == declarationBracket && current.typeContext && current.last == "value" {
-		current.conditional = declarationConditionalCondition
+		if len(current.conditionals) == 0 || current.conditionals[len(current.conditionals)-1] == declarationConditionalTrueComplete ||
+			current.conditionals[len(current.conditionals)-1] == declarationConditionalFalseComplete {
+			current.conditionals = append(current.conditionals, declarationConditionalCondition)
+		}
 	}
 	current.last = keyword
 }
@@ -98,11 +116,12 @@ func (s *declarationStructure) markKeyword(keyword string) {
 func (s *declarationStructure) markQuestion() {
 	current := s.current()
 	if current.kind == declarationBracket && current.typeContext && current.last == "value" {
-		if current.conditional == declarationConditionalNone {
+		if len(current.conditionals) == 0 {
 			return
 		}
-		if current.conditional == declarationConditionalCondition {
-			current.conditional = declarationConditionalTrue
+		last := len(current.conditionals) - 1
+		if current.conditionals[last] == declarationConditionalCondition {
+			current.conditionals[last] = declarationConditionalTrue
 		}
 	}
 	current.last = "?"
@@ -110,8 +129,12 @@ func (s *declarationStructure) markQuestion() {
 
 func (s *declarationStructure) markColon() {
 	current := s.current()
-	if current.conditional == declarationConditionalTrueComplete {
-		current.conditional = declarationConditionalFalse
+	current.reduceCompletedConditionals()
+	if len(current.conditionals) > 0 {
+		last := len(current.conditionals) - 1
+		if current.conditionals[last] == declarationConditionalTrueComplete {
+			current.conditionals[last] = declarationConditionalFalse
+		}
 	}
 	current.last = ":"
 }
@@ -133,7 +156,8 @@ func (s *declarationStructure) openGeneric() {
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
-	if current.conditional != declarationConditionalNone || current.requiresListOperand() && !current.hasListOperand() {
+	current.reduceCompletedConditionals()
+	if len(current.conditionals) != 0 || current.requiresListOperand() && !current.hasListOperand() {
 		return false
 	}
 	current.last = ","
@@ -156,7 +180,8 @@ func (c *declarationContext) hasListOperand() bool {
 }
 
 func (c *declarationContext) canClose() bool {
-	if c.conditional != declarationConditionalNone {
+	c.reduceCompletedConditionals()
+	if len(c.conditionals) != 0 {
 		return false
 	}
 	if c.last == "," {
