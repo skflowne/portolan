@@ -23,7 +23,7 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			if !complete {
 				return 0, false, nil
 			}
-			if kind == lexicalSpanLiteral && !structure.markValue() {
+			if kind == lexicalSpanLiteral && !structure.markValue(false) {
 				return 0, false, nil
 			}
 			i = next
@@ -68,7 +68,7 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			if structure.atRoot() {
 				return 0, false, nil
 			}
-			accepted = structure.markValue()
+			accepted = structure.markValue(false)
 		case ',':
 			accepted = structure.acceptSeparator()
 		case '?':
@@ -87,7 +87,8 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 		default:
 			r, _ := utf8.DecodeRuneInString(source[i:end])
 			if !unicode.IsSpace(r) {
-				accepted = structure.markValue()
+				tokenStart := isIdentifierByte(source[i]) && (i == start || !isIdentifierByte(source[i-1]))
+				accepted = structure.markValue(tokenStart)
 			}
 		}
 		if !accepted {
