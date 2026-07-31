@@ -319,6 +319,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Tupled<T extends [A extends B ? C : D]>",
 		},
 		{
+			name:   "nested conditional tuple operand",
+			source: "class Nested<T extends [A extends B ? C extends D ? E : F : G]> {}",
+			symbol: core.Symbol{Name: "Nested", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 66}}},
+			want:   "class Nested<T extends [A extends B ? C extends D ? E : F : G]>",
+		},
+		{
 			name:   "reserved-word heritage property",
 			source: "class Selected extends constructors.new {}",
 			symbol: core.Symbol{Name: "Selected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
@@ -441,6 +447,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "incomplete conditional tuple operand",
 			source: "class Broken<T extends [A extends B ?]> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
+		},
+		{
+			name:   "incomplete nested conditional tuple operand",
+			source: "class Broken<T extends [A extends B ? C extends D ? E : F]> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 62}}},
 		},
 	}
 
