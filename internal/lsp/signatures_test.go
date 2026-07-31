@@ -444,6 +444,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
 		},
 		{
+			name:   "incomplete relational array operand",
+			source: "class Broken extends choose(A < [B ?]) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
 			name:   "incomplete conditional tuple operand",
 			source: "class Broken<T extends [A extends B ?]> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 42}}},
