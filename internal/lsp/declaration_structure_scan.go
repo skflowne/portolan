@@ -23,17 +23,11 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int, s
 			if !complete {
 				return 0, false, nil
 			}
-			if kind == lexicalSpanLiteral && (structure.awaitingArrow() || !structure.markValue()) {
+			if kind == lexicalSpanLiteral && !structure.markValue() {
 				return 0, false, nil
 			}
 			i = next
 			continue
-		}
-		if structure.awaitingArrow() {
-			r, _ := utf8.DecodeRuneInString(source[i:end])
-			if !unicode.IsSpace(r) && !(source[i] == '=' && i+1 < end && source[i+1] == '>') {
-				return 0, false, nil
-			}
 		}
 		if source[i] == '/' {
 			return 0, false, nil
