@@ -60,6 +60,13 @@ func (s *declarationStructure) mark(token string) {
 	s.current().last = token
 }
 
+func (s *declarationStructure) markQuestion() {
+	current := s.current()
+	if current.kind != declarationBracket || current.last != "value" {
+		current.last = "?"
+	}
+}
+
 func (s *declarationStructure) atRoot() bool {
 	return s.current().kind == declarationRoot
 }
@@ -211,7 +218,9 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 			if !structure.acceptSeparator() {
 				return 0, false, nil
 			}
-		case '?', ':', '=', '&', '|', '.':
+		case '?':
+			structure.markQuestion()
+		case ':', '=', '&', '|', '.':
 			structure.mark(string(source[i]))
 		default:
 			r, _ := utf8.DecodeRuneInString(source[i:end])

@@ -100,6 +100,7 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		name string
 		want string
 	}{
+		{name: "Broken", want: "class Broken"},
 		{name: "MissingGenericOperand", want: "class MissingGenericOperand"},
 		{name: "MissingConstraintOperand", want: "class MissingConstraintOperand<T extends any, A>"},
 		{name: "DuplicateCallOperand", want: "class DuplicateCallOperand"},
@@ -304,6 +305,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			source: "class Tupled extends choose([Base, Other]) {}",
 			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 45}}},
 			want:   "class Tupled extends choose([Base, Other])",
+		},
+		{
+			name:   "optional tuple operand",
+			source: "class Tupled<T extends [string?]> {}",
+			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+			want:   "class Tupled<T extends [string?]>",
 		},
 		{
 			name:   "reserved-word heritage property",
