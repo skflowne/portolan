@@ -17,12 +17,12 @@ import (
 	"github.com/skflowne/portolan/internal/tools"
 )
 
+// pinnedContract is the independently authored expectation for the tools that
+// still answer with structured JSON. get_outline answers with compact text and
+// is pinned by the files under fixtures/expected instead.
 type pinnedContract struct {
 	DefinitionTotalArea tools.FindDefinitionOutput `json:"definition_total_area"`
 	ReferencesCircle    tools.FindReferencesOutput `json:"references_circle"`
-	OutlineGeometry     tools.GetOutlineOutput     `json:"outline_geometry"`
-	OutlineMain         tools.GetOutlineOutput     `json:"outline_main"`
-	OutlineInvalidFile  tools.GetOutlineOutput     `json:"outline_invalid_file"`
 	Telemetry           []expectedEvent            `json:"telemetry"`
 	raw                 map[string]any
 }
@@ -101,15 +101,42 @@ func normalizeContractPaths(t *testing.T, contract *pinnedContract) {
 			locations[i].File = fixtureRelativePath(t, locations[i].File)
 		}
 	}
-	normalizeSymbols := func(symbols []tools.OutlineSymbol) {
-		for i := range symbols {
-			symbols[i].File = fixtureRelativePath(t, symbols[i].File)
-		}
-	}
 	normalizeLocations(contract.DefinitionTotalArea.Locations)
 	normalizeLocations(contract.ReferencesCircle.Locations)
-	normalizeSymbols(contract.OutlineGeometry.Symbols)
-	normalizeSymbols(contract.OutlineMain.Symbols)
+}
+
+// fixtureRelativeText rewrites every absolute fixture path in an agent-facing
+// text response to its fixture-relative slash form, so pinned text compares
+// identically in any checkout. Paths reach the response through the header and
+// through state-marker messages alike, so the rewrite is not header-only.
+func fixtureRelativeText(t *testing.T, text string) string {
+	t.Helper()
+	root := fixtureRoot(t) + string(filepath.Separator)
+	var rewritten strings.Builder
+	for {
+		start := strings.Index(text, root)
+		if start < 0 {
+			rewritten.WriteString(text)
+			return rewritten.String()
+		}
+		rewritten.WriteString(text[:start])
+		rest := text[start+len(root):]
+		end := strings.IndexAny(rest, " \n")
+		if end < 0 {
+			end = len(rest)
+		}
+		rewritten.WriteString(filepath.ToSlash(rest[:end]))
+		text = rest[end:]
+	}
+}
+
+func expectedText(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixtureRoot(t), "expected", name+".txt"))
+	if err != nil {
+		t.Fatalf("reading pinned text %q: %v", name, err)
+	}
+	return strings.TrimSuffix(string(data), "\n")
 }
 
 func fixtureRelativePath(t *testing.T, path string) string {
@@ -129,9 +156,6 @@ func validatePinnedContract(got, want pinnedContract) error {
 	}{
 		{"definition_total_area", got.DefinitionTotalArea, want.DefinitionTotalArea},
 		{"references_circle", got.ReferencesCircle, want.ReferencesCircle},
-		{"outline_geometry", got.OutlineGeometry, want.OutlineGeometry},
-		{"outline_main", got.OutlineMain, want.OutlineMain},
-		{"outline_invalid_file", got.OutlineInvalidFile, want.OutlineInvalidFile},
 	}
 	for _, check := range checks {
 		if err := contractMismatch(check.path, check.got, check.want); err != nil {
@@ -262,9 +286,12 @@ func compareJSON(path string, got, want any) error {
 	return nil
 }
 
+// TestPinnedStructuredOutputRejectsRawMutations proves the raw comparator the
+// remaining structured tools depend on rejects omitted zero-valued fields and
+// unexpected keys, which Go decoding alone would silently accept.
 func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 	contract := loadPinnedContract(t)
-	wantRaw := expectedStructuredOutput(t, contract, "outline_geometry")
+	wantRaw := expectedStructuredOutput(t, contract, "references_circle")
 	tests := []struct {
 		name   string
 		mutate func(map[string]any)
@@ -276,12 +303,9 @@ func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 		{name: "missing freshness stale false", mutate: func(output map[string]any) {
 			delete(output["freshness"].(map[string]any), "stale")
 		}},
-		{name: "missing zero coordinate", mutate: func(output map[string]any) {
-			symbol := output["symbols"].([]any)[0].(map[string]any)
-			delete(symbol["range"].(map[string]any)["start"].(map[string]any), "character")
-		}},
-		{name: "missing zero depth", mutate: func(output map[string]any) {
-			delete(output["symbols"].([]any)[0].(map[string]any), "depth")
+		{name: "missing nested list coordinate", mutate: func(output map[string]any) {
+			location := output["locations"].([]any)[1].(map[string]any)
+			delete(location["range"].(map[string]any)["start"].(map[string]any), "line")
 		}},
 		{name: "unexpected top-level key", mutate: func(output map[string]any) { output["extra"] = true }},
 		{name: "unexpected nested key", mutate: func(output map[string]any) {
@@ -292,8 +316,8 @@ func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := cloneJSONValue(t, wantRaw).(map[string]any)
 			tt.mutate(raw)
-			var got tools.GetOutlineOutput
-			if err := decodeStructuredOutput("outline_geometry", raw, wantRaw, &got); err == nil {
+			var got tools.FindReferencesOutput
+			if err := decodeStructuredOutput("references_circle", raw, wantRaw, &got); err == nil {
 				t.Fatal("raw mutation passed the pinned contract")
 			}
 		})
@@ -345,25 +369,16 @@ func TestPinnedContractRejectsMutations(t *testing.T) {
 		{name: "swapped reference locations", mutate: func(c *pinnedContract, _ []map[string]any) {
 			c.ReferencesCircle.Locations[2], c.ReferencesCircle.Locations[3] = c.ReferencesCircle.Locations[3], c.ReferencesCircle.Locations[2]
 		}},
-		{name: "swapped outline responses", mutate: func(c *pinnedContract, _ []map[string]any) {
-			c.OutlineGeometry, c.OutlineMain = c.OutlineMain, c.OutlineGeometry
-		}},
-		{name: "missing geometry signature", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineGeometry.Symbols[4].Signature = "" }},
-		{name: "missing main signature", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineMain.Symbols[5].Signature = "" }},
-		{name: "wrong complete range", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineGeometry.Symbols[0].Range.End.Character++ }},
-		{name: "wrong selection range", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineGeometry.Symbols[0].SelRange.End.Character++ }},
-		{name: "wrong kind", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineGeometry.Symbols[0].Kind = "class" }},
-		{name: "wrong nesting", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineGeometry.Symbols[1].Depth = 0 }},
 		{name: "wrong freshness", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Freshness.Generation = 1 }},
-		{name: "wrong truncation", mutate: func(c *pinnedContract, _ []map[string]any) { c.OutlineMain.Truncated = true }},
+		{name: "wrong truncation", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Truncated = true }},
 		{name: "duplicate replaces missing event", mutate: func(_ *pinnedContract, events []map[string]any) { events[2] = events[1] }},
 		{name: "swapped outline events", mutate: func(_ *pinnedContract, events []map[string]any) { events[0], events[3] = events[3], events[0] }},
 		{name: "wrong session tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["session_id"] = "other" }},
 		{name: "wrong graph tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["graph_mode"] = "no-graph" }},
 		{name: "wrong result size", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["result_size"] = json.Number("12") }},
 		{name: "unexpected error", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["err"] = "wrong call" }},
-		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[4], "err") }},
-		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[4]["err"] = "other failure" }},
+		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[5], "err") }},
+		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[5]["err"] = "other failure" }},
 		{name: "missing timestamp", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[0], "ts") }},
 	}
 	for _, tt := range tests {

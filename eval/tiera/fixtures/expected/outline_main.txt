@@ -1,0 +1,12 @@
+file src/main.ts
+ranges 0-based
+
+(alias) class Circle [3:9-3:15]
+(alias) class Rectangle [3:17-3:26]
+(alias) function totalArea(shapes: Shape[]): number [3:28-3:37]
+(alias) interface Shape [3:39-3:44]
+const shapes: Shape[] [5:6-9:1]
+function report(): number [11:0-15:1]
+  const t: number [12:8-12:29]
+
+7 symbols; complete

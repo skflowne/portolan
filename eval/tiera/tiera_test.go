@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,10 +92,50 @@ func callInto(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	}
 }
 
+// callText drives a tool that answers in compact text and returns the response
+// with fixture paths made checkout-independent. It also holds the transport
+// invariant: exactly one text content item and no structured duplicate.
+func callText(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: call error: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("%s: tool reported protocol error: %+v", name, res.Content)
+	}
+	if res.StructuredContent != nil {
+		t.Fatalf("%s duplicated its result as structured content: %+v", name, res.StructuredContent)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("%s content = %+v, want exactly one item", name, res.Content)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("%s content item type = %T, want *mcp.TextContent", name, res.Content[0])
+	}
+	normalized := fixtureRelativeText(t, text.Text)
+	if strings.Contains(normalized, fixtureRoot(t)) {
+		t.Fatalf("%s response retains an absolute fixture path: %q", name, normalized)
+	}
+	return normalized
+}
+
+func assertOutlineText(t *testing.T, sess *mcp.ClientSession, file, pinned string) {
+	t.Helper()
+	got := callText(t, sess, "get_outline", map[string]any{"file": file})
+	if want := expectedText(t, pinned); got != want {
+		t.Fatalf("%s text =\n%s\n\nwant\n%s", pinned, got, want)
+	}
+}
+
 func TestTierA(t *testing.T) {
 	daemon := startDaemon(t, "tiera", filepath.Join(t.TempDir(), "control.sock"))
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
 	mainTS := filepath.Join(fixtureRoot(t), "src", "main.ts")
+	emptyTS := filepath.Join(fixtureRoot(t), "src", "empty.ts")
 	want := loadPinnedContract(t)
 	var got pinnedContract
 
@@ -116,11 +157,12 @@ func TestTierA(t *testing.T) {
 		}
 	})
 
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, expectedStructuredOutput(t, want, "outline_geometry"), &got.OutlineGeometry)
+	assertOutlineText(t, daemon.sess, geometry, "outline_geometry")
 	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, expectedStructuredOutput(t, want, "references_circle"), &got.ReferencesCircle)
 	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, expectedStructuredOutput(t, want, "definition_total_area"), &got.DefinitionTotalArea)
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": mainTS}, expectedStructuredOutput(t, want, "outline_main"), &got.OutlineMain)
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": "relative.ts"}, expectedStructuredOutput(t, want, "outline_invalid_file"), &got.OutlineInvalidFile)
+	assertOutlineText(t, daemon.sess, mainTS, "outline_main")
+	assertOutlineText(t, daemon.sess, emptyTS, "outline_empty")
+	assertOutlineText(t, daemon.sess, "relative.ts", "outline_invalid_file")
 	normalizeContractPaths(t, &got)
 	if err := validatePinnedContract(got, want); err != nil {
 		t.Fatal(err)
@@ -149,20 +191,7 @@ func TestTierAOutlineTruncation(t *testing.T) {
 		MaxResults:    cap,
 	})
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
-	pinned := loadPinnedContract(t)
-	rawWant := expectedStructuredOutput(t, pinned, "outline_geometry").(map[string]any)
-	rawWant["symbols"] = rawWant["symbols"].([]any)[:cap]
-	rawWant["truncated"] = true
-	var got pinnedContract
-	callInto(t, daemon.sess, "get_outline", map[string]any{"file": geometry}, rawWant, &got.OutlineGeometry)
-	normalizeContractPaths(t, &got)
-
-	want := pinnedContract{OutlineGeometry: pinned.OutlineGeometry}
-	want.OutlineGeometry.Symbols = want.OutlineGeometry.Symbols[:cap]
-	want.OutlineGeometry.Truncated = true
-	if err := validatePinnedContract(got, want); err != nil {
-		t.Fatal(err)
-	}
+	assertOutlineText(t, daemon.sess, geometry, "outline_geometry_capped")
 
 	stopDaemon(t, daemon)
 	wantEvent := expectedEvent{Tool: "get_outline", SessionID: "tiera-capped", GraphMode: "graph", ResultSize: cap, Truncated: true}

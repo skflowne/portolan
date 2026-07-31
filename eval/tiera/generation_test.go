@@ -2,15 +2,14 @@ package tiera
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/skflowne/portolan/eval/testinfra"
-	"github.com/skflowne/portolan/internal/tools"
 )
 
 func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
@@ -18,11 +17,8 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 	d := startDaemon(t, "generation-propagation", socket)
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
 
-	pinned := loadPinnedContract(t)
-	beforeWant := expectedStructuredOutput(t, pinned, "outline_geometry")
-	var before tools.GetOutlineOutput
-	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, beforeWant, &before)
-	assertOutlineGeneration(t, before, 0)
+	before := callText(t, d.sess, "get_outline", map[string]any{"file": geometry})
+	assertFreshnessStaysInternal(t, before)
 
 	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
 	if err != nil {
@@ -43,11 +39,13 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 		t.Fatalf("sync response = %q", response)
 	}
 
-	afterWant := expectedStructuredOutput(t, pinned, "outline_geometry").(map[string]any)
-	afterWant["freshness"].(map[string]any)["generation"] = json.Number("1")
-	var after tools.GetOutlineOutput
-	callInto(t, d.sess, "get_outline", map[string]any{"file": geometry}, afterWant, &after)
-	assertOutlineGeneration(t, after, 1)
+	after := callText(t, d.sess, "get_outline", map[string]any{"file": geometry})
+	assertFreshnessStaysInternal(t, after)
+	// A bumped generation reaches telemetry below but must not perturb the
+	// agent-facing text of an unchanged file.
+	if after != before {
+		t.Fatalf("outline text changed with the generation:\n%s\n\nwas\n%s", after, before)
+	}
 
 	stopDaemon(t, d)
 	events, err := testinfra.WaitForQuiescentJSONL(d.jsonl, 2, testinfra.ShortWait, 100*time.Millisecond)
@@ -64,15 +62,14 @@ func TestGenerationPropagatesFromControlSyncToMCP(t *testing.T) {
 	assertProtocolOnlyStdout(t, d.proc.StdoutBytes())
 }
 
-func assertOutlineGeneration(t *testing.T, out tools.GetOutlineOutput, want uint64) {
+func assertFreshnessStaysInternal(t *testing.T, text string) {
 	t.Helper()
-	if !out.Found || out.Error != "" {
-		t.Fatalf("get_outline failed: found=%v error=%q message=%q", out.Found, out.Error, out.Message)
+	if want := expectedText(t, "outline_geometry"); text != want {
+		t.Fatalf("outline text =\n%s\n\nwant\n%s", text, want)
 	}
-	if out.Freshness.Generation != want {
-		t.Errorf("generation = %d, want %d", out.Freshness.Generation, want)
-	}
-	if out.Freshness.Stale {
-		t.Error("Phase 0 result must not be stale")
+	for _, token := range []string{"generation", "stale"} {
+		if strings.Contains(strings.ToLower(text), token) {
+			t.Errorf("routine outline text exposes %q: %q", token, text)
+		}
 	}
 }

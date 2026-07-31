@@ -18,53 +18,12 @@
     "truncated": false,
     "freshness": {"generation": 0, "stale": false}
   },
-  "outline_geometry": {
-    "found": true,
-    "symbols": [
-      {"name": "Shape", "kind": "interface", "file": "src/geometry.ts", "range": {"start": {"line": 3, "character": 0}, "end": {"line": 5, "character": 1}}, "selRange": {"start": {"line": 3, "character": 17}, "end": {"line": 3, "character": 22}}, "signature": "interface Shape", "depth": 0},
-      {"name": "area", "kind": "method", "file": "src/geometry.ts", "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 17}}, "selRange": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 6}}, "signature": "area(): number", "depth": 1},
-      {"name": "Circle", "kind": "class", "file": "src/geometry.ts", "range": {"start": {"line": 7, "character": 0}, "end": {"line": 13, "character": 1}}, "selRange": {"start": {"line": 7, "character": 13}, "end": {"line": 7, "character": 19}}, "signature": "class Circle implements Shape", "depth": 0},
-      {"name": "constructor", "kind": "constructor", "file": "src/geometry.ts", "range": {"start": {"line": 8, "character": 2}, "end": {"line": 8, "character": 48}}, "selRange": {"start": {"line": 8, "character": 2}, "end": {"line": 8, "character": 2}}, "signature": "constructor(radius: number)", "depth": 1},
-      {"name": "radius", "kind": "property", "file": "src/geometry.ts", "range": {"start": {"line": 8, "character": 14}, "end": {"line": 8, "character": 44}}, "selRange": {"start": {"line": 8, "character": 30}, "end": {"line": 8, "character": 36}}, "signature": "radius: number", "depth": 1},
-      {"name": "area", "kind": "method", "file": "src/geometry.ts", "range": {"start": {"line": 10, "character": 2}, "end": {"line": 12, "character": 3}}, "selRange": {"start": {"line": 10, "character": 2}, "end": {"line": 10, "character": 6}}, "signature": "area(): number", "depth": 1},
-      {"name": "Rectangle", "kind": "class", "file": "src/geometry.ts", "range": {"start": {"line": 15, "character": 0}, "end": {"line": 24, "character": 1}}, "selRange": {"start": {"line": 15, "character": 13}, "end": {"line": 15, "character": 22}}, "signature": "class Rectangle implements Shape", "depth": 0},
-      {"name": "constructor", "kind": "constructor", "file": "src/geometry.ts", "range": {"start": {"line": 16, "character": 2}, "end": {"line": 19, "character": 6}}, "selRange": {"start": {"line": 16, "character": 2}, "end": {"line": 16, "character": 2}}, "signature": "constructor(width: number, height: number)", "depth": 1},
-      {"name": "width", "kind": "property", "file": "src/geometry.ts", "range": {"start": {"line": 17, "character": 4}, "end": {"line": 17, "character": 33}}, "selRange": {"start": {"line": 17, "character": 20}, "end": {"line": 17, "character": 25}}, "signature": "width: number", "depth": 1},
-      {"name": "height", "kind": "property", "file": "src/geometry.ts", "range": {"start": {"line": 18, "character": 4}, "end": {"line": 18, "character": 34}}, "selRange": {"start": {"line": 18, "character": 20}, "end": {"line": 18, "character": 26}}, "signature": "height: number", "depth": 1},
-      {"name": "area", "kind": "method", "file": "src/geometry.ts", "range": {"start": {"line": 21, "character": 2}, "end": {"line": 23, "character": 3}}, "selRange": {"start": {"line": 21, "character": 2}, "end": {"line": 21, "character": 6}}, "signature": "area(): number", "depth": 1},
-      {"name": "totalArea", "kind": "function", "file": "src/geometry.ts", "range": {"start": {"line": 26, "character": 0}, "end": {"line": 28, "character": 1}}, "selRange": {"start": {"line": 26, "character": 16}, "end": {"line": 26, "character": 25}}, "signature": "function totalArea(shapes: Shape[]): number", "depth": 0},
-      {"name": "shapes.reduce() callback", "kind": "function", "file": "src/geometry.ts", "range": {"start": {"line": 27, "character": 23}, "end": {"line": 27, "character": 49}}, "selRange": {"start": {"line": 27, "character": 23}, "end": {"line": 27, "character": 23}}, "signature": "(sum: number, s: Shape): number", "depth": 1}
-    ],
-    "truncated": false,
-    "freshness": {"generation": 0, "stale": false}
-  },
-  "outline_main": {
-    "found": true,
-    "symbols": [
-      {"name": "Circle", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 3, "character": 9}, "end": {"line": 3, "character": 15}}, "selRange": {"start": {"line": 3, "character": 9}, "end": {"line": 3, "character": 15}}, "signature": "(alias) class Circle", "depth": 0},
-      {"name": "Rectangle", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 3, "character": 17}, "end": {"line": 3, "character": 26}}, "selRange": {"start": {"line": 3, "character": 17}, "end": {"line": 3, "character": 26}}, "signature": "(alias) class Rectangle", "depth": 0},
-      {"name": "totalArea", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 3, "character": 28}, "end": {"line": 3, "character": 37}}, "selRange": {"start": {"line": 3, "character": 28}, "end": {"line": 3, "character": 37}}, "signature": "(alias) function totalArea(shapes: Shape[]): number", "depth": 0},
-      {"name": "Shape", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 3, "character": 39}, "end": {"line": 3, "character": 44}}, "selRange": {"start": {"line": 3, "character": 39}, "end": {"line": 3, "character": 44}}, "signature": "(alias) interface Shape", "depth": 0},
-      {"name": "shapes", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 5, "character": 6}, "end": {"line": 9, "character": 1}}, "selRange": {"start": {"line": 5, "character": 6}, "end": {"line": 5, "character": 12}}, "signature": "const shapes: Shape[]", "depth": 0},
-      {"name": "report", "kind": "function", "file": "src/main.ts", "range": {"start": {"line": 11, "character": 0}, "end": {"line": 15, "character": 1}}, "selRange": {"start": {"line": 11, "character": 16}, "end": {"line": 11, "character": 22}}, "signature": "function report(): number", "depth": 0},
-      {"name": "t", "kind": "variable", "file": "src/main.ts", "range": {"start": {"line": 12, "character": 8}, "end": {"line": 12, "character": 29}}, "selRange": {"start": {"line": 12, "character": 8}, "end": {"line": 12, "character": 9}}, "signature": "const t: number", "depth": 1}
-    ],
-    "truncated": false,
-    "freshness": {"generation": 0, "stale": false}
-  },
-  "outline_invalid_file": {
-    "found": false,
-    "symbols": null,
-    "truncated": false,
-    "freshness": {"generation": 0, "stale": false},
-    "message": "file must be an absolute Linux/WSL path, Windows drive path, or same-distro WSL UNC path",
-    "error": "invalid file path"
-  },
   "telemetry": [
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 13, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_references", "session_id": "tiera", "graph_mode": "graph", "result_size": 4, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_definition", "session_id": "tiera", "graph_mode": "graph", "result_size": 1, "truncated": false, "generation": 0, "stale": false},
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 7, "truncated": false, "generation": 0, "stale": false},
+    {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 0, "truncated": false, "generation": 0, "stale": false},
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 0, "truncated": false, "generation": 0, "stale": false, "err": "invalid file path"}
   ]
 }

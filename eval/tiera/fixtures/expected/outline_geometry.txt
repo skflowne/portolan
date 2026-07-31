@@ -1,0 +1,21 @@
+file src/geometry.ts
+ranges 0-based
+
+interface Shape [3:0-5:1]
+  area(): number [4:2-4:17]
+
+class Circle implements Shape [7:0-13:1]
+  constructor(radius: number) [8:2-8:48]
+  radius: number [8:14-8:44]
+  area(): number [10:2-12:3]
+
+class Rectangle implements Shape [15:0-24:1]
+  constructor(width: number, height: number) [16:2-19:6]
+  width: number [17:4-17:33]
+  height: number [18:4-18:34]
+  area(): number [21:2-23:3]
+
+function totalArea(shapes: Shape[]): number [26:0-28:1]
+  (sum: number, s: Shape): number [27:23-27:49]
+
+13 symbols; complete
