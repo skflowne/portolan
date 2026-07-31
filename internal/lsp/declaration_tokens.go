@@ -35,6 +35,7 @@ const (
 	declarationKeyof
 	declarationTypeof
 	declarationInfer
+	declarationIn
 	declarationReadonly
 	declarationNew
 	declarationAbstract
@@ -67,6 +68,7 @@ var declarationTokenMetadataByToken = [...]declarationTokenMetadata{
 	declarationKeyof:        {lexeme: "keyof", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
 	declarationTypeof:       {lexeme: "typeof", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
 	declarationInfer:        {lexeme: "infer", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
+	declarationIn:           {lexeme: "in", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
 	declarationReadonly:     {lexeme: "readonly", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
 	declarationNew:          {lexeme: "new", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
 	declarationAbstract:     {lexeme: "abstract", boundary: declarationTokenIdentifierBoundary, requiresOperand: true},
