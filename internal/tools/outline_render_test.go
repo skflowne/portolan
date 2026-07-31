@@ -197,6 +197,32 @@ func TestRenderOutlineEscapesUntrustedTextInEveryState(t *testing.T) {
 			wantLines: 6,
 		},
 		{
+			name: "symbol signature",
+			out: GetOutlineOutput{
+				Found: true,
+				File:  "/project/src/geometry.ts",
+				Symbols: []OutlineSymbol{
+					renderedSymbol(0, "Shape", core.SymbolKindInterface, hostile, rng(3, 0, 5, 1)),
+				},
+			},
+			want: "file /project/src/geometry.ts\nranges 0-based\n\n" +
+				`/project/src/a\nranges 0-based\n\u001b[31mfake.ts [3:0-5:1]`,
+			wantLines: 6,
+		},
+		{
+			name: "symbol name without a signature",
+			out: GetOutlineOutput{
+				Found: true,
+				File:  "/project/src/geometry.ts",
+				Symbols: []OutlineSymbol{
+					renderedSymbol(0, hostile, core.SymbolKindInterface, "", rng(3, 0, 5, 1)),
+				},
+			},
+			want: "file /project/src/geometry.ts\nranges 0-based\n\n" +
+				`interface /project/src/a\nranges 0-based\n\u001b[31mfake.ts [3:0-5:1]`,
+			wantLines: 6,
+		},
+		{
 			name:      "honest empty",
 			out:       GetOutlineOutput{File: hostile, Message: "no symbols found in " + hostile},
 			want:      `empty: no symbols found in /project/src/a\nranges 0-based\n\u001b[31mfake.ts`,
