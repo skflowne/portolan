@@ -44,8 +44,11 @@ canonical paths, and hover presentation wrappers become compact plain strings be
 - `internal/lsp/provider.go` contains the production `Provider` implementation and the definition,
   references, and document-symbol request orchestration.
 - `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
-  `internal/lsp/declaration_headers.go` owns retained-source class/interface header extraction, and
-  `internal/lsp/hover_conversion.go` owns hover decoding and tsgo display normalization.
+  `internal/lsp/declaration_headers.go` owns retained-range and name validation plus lexical scanning,
+  trivia removal, and whitespace normalization; `internal/lsp/declaration_structure.go` owns
+  syntactic contexts, operand and separator validation, the outer-body boundary, and atomic
+  structural rejection of malformed headers; and `internal/lsp/hover_conversion.go` owns hover
+  decoding and tsgo display normalization.
 - `internal/lsp/protocol.go` contains private method-specific wire shapes: `rawLocation`,
   `lspDocumentSymbol`, `hoverResult`, `markupContent`, and the numeric symbol-kind map.
 - `internal/lsp/conversion.go` contains document-symbol, location, position, and range conversion;
@@ -170,17 +173,20 @@ canonical signature empty; it does not remove the symbol.
 
 `SymbolSignatures` returns one string per input symbol in input order. Empty input returns a
 non-nil empty slice. Named classes and interfaces prefer a complete declaration header extracted
-from their canonical range in the exact source snapshot retained by `didOpen`. The extractor matches
-the symbol kind and name, removes preceding modifiers and comment trivia, collapses syntactic
-whitespace, preserves generic and `extends`/`implements` text, and stops before the outer body. It
-tracks nested delimiters plus comments and literals so their braces cannot become the body opener.
-Malformed, anonymous, mismatched, or otherwise unrecognized headers remain on the existing hover
-path; extraction never returns a partial source header. Some synthetic bodyless declarations are
-also summarized directly from the retained snapshot, while other entries use hover. Hover work is
-capped at eight concurrent requests. Planning or retained-source errors return before hover dispatch.
-After the hover batch starts, the first request or decoding error cancels its sibling work; caller
-cancellation also stops the batch. Every error path returns no signature slice. The tools layer also
-rejects a successful result whose length differs from the retained symbol count.
+from their canonical range in the exact source snapshot retained by `didOpen`.
+`declaration_headers.go` validates the retained range, symbol kind, and name, removes preceding
+modifiers and lexical trivia, preserves literals and non-trivia source such as valid generic and
+`extends`/`implements` text, and collapses syntactic whitespace. `declaration_structure.go` owns
+nested syntactic contexts, operand and separator validity, and the outer-body boundary, accepting
+valid structure or rejecting malformed structure atomically. Anonymous, mismatched, lexically
+incomplete, structurally malformed,
+or otherwise unrecognized headers remain on the existing hover path; extraction never returns a
+partial source header. Some synthetic bodyless declarations are also summarized directly from the
+retained snapshot, while other entries use hover. Hover work is capped at eight concurrent requests.
+Planning or retained-source errors return before hover dispatch. After the hover batch starts, the
+first request or decoding error cancels its sibling work; caller cancellation also stops the batch.
+Every error path returns no signature slice. The tools layer also rejects a successful result whose
+length differs from the retained symbol count.
 
 ## Two-stage bounded structural retrieval
 
