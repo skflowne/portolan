@@ -118,7 +118,7 @@ func TestFirstOpenCancellationDoesNotWaitForOrApplyStaleRead(t *testing.T) {
 
 func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 	writer := newRecordingWriteCloser()
-	text := "export class Box<T> extends Base<T> {\n  value!: T;\n}\n"
+	text := "export class Box<T> extends Base<T> {\n  value!: T;\n}\ninterface Callable {\n  (value: number): string;\n}\n"
 	reads := 0
 	p := newOpenUnitProvider(func(_ context.Context, _ string) ([]byte, error) {
 		reads++
@@ -130,24 +130,39 @@ func TestSymbolSignaturesUseDidOpenSnapshot(t *testing.T) {
 	}
 	text = "const changed = 1;\n"
 
-	symbols := []core.Symbol{{
-		Name: "Box",
-		Kind: core.SymbolKindClass,
-		Range: core.Range{
-			Start: core.Position{},
-			End:   core.Position{Line: 2, Character: 1},
+	symbols := []core.Symbol{
+		{
+			Name: "Box",
+			Kind: core.SymbolKindClass,
+			Range: core.Range{
+				Start: core.Position{},
+				End:   core.Position{Line: 2, Character: 1},
+			},
+			SelRange: core.Range{
+				Start: core.Position{Character: 13},
+				End:   core.Position{Character: 16},
+			},
 		},
-		SelRange: core.Range{
-			Start: core.Position{Character: 13},
-			End:   core.Position{Character: 16},
+		{
+			Name: "()",
+			Kind: "method",
+			Range: core.Range{
+				Start: core.Position{Line: 4, Character: 2},
+				End:   core.Position{Line: 4, Character: 26},
+			},
+			SelRange: core.Range{
+				Start: core.Position{Line: 4, Character: 2},
+				End:   core.Position{Line: 4, Character: 2},
+			},
 		},
-	}}
+	}
 	got, err := p.SymbolSignatures(context.Background(), "/repo/a.ts", symbols)
 	if err != nil {
 		t.Fatalf("SymbolSignatures: %v", err)
 	}
-	if len(got) != 1 || got[0] != "class Box<T> extends Base<T>" {
-		t.Fatalf("signatures = %q, want didOpen snapshot declaration", got)
+	want := []string{"class Box<T> extends Base<T>", "(value: number): string"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("signatures = %q, want didOpen snapshot declarations %q", got, want)
 	}
 	if reads != 1 {
 		t.Fatalf("file reads = %d, want one", reads)
