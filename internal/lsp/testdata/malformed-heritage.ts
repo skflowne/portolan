@@ -1,6 +1,9 @@
 class A {}
 class Base {}
-class Broken extends Base<A,, B> {}
+class DuplicateGenericOperand extends Base<A,, B> {}
+class Broken<T = A extends B ? C> {}
+class Dup extends Base extends A {}
+class Regex extends /x{1}/.constructor {}
 class MissingGenericOperand extends A<, A> {}
 class MissingConstraintOperand<T extends, A> {}
 class DuplicateCallOperand extends choose(A,, A) {}

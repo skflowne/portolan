@@ -53,7 +53,7 @@ func extractDeclarationHeader(ctx context.Context, source string, symbol core.Sy
 		return "", false, err
 	}
 
-	bodyOffset, ok, err := declarationBodyOffset(ctx, source, nameOffset+len(symbol.Name), end)
+	bodyOffset, ok, err := declarationBodyOffset(ctx, source, nameOffset+len(symbol.Name), end, symbol.Kind)
 	if err != nil || !ok {
 		return "", false, err
 	}

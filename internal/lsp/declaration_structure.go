@@ -1,11 +1,6 @@
 package lsp
 
-import (
-	"context"
-	"strings"
-	"unicode"
-	"unicode/utf8"
-)
+import "github.com/skflowne/portolan/internal/core"
 
 type declarationContextKind uint8
 
@@ -27,56 +22,97 @@ const (
 	declarationConditionalFalseComplete
 )
 
+type declarationGenericPurpose uint8
+
+const (
+	declarationGenericTypeList declarationGenericPurpose = iota + 1
+	declarationGenericParameters
+	declarationGenericCandidate
+)
+
+type declarationParameterStage uint8
+
+const (
+	declarationParameterName declarationParameterStage = iota
+	declarationParameterConstraint
+	declarationParameterDefault
+)
+
+type declarationHeritagePhase uint8
+
+const (
+	declarationBeforeHeritage declarationHeritagePhase = iota
+	declarationExtendsHeritage
+	declarationImplementsHeritage
+)
+
 type declarationContext struct {
-	kind         declarationContextKind
-	last         string
-	typeContext  bool
-	conditionals []declarationConditionalStage
-	// Expression contexts treat an unmatched generic candidate as a relational operator.
-	tentativeGeneric                  bool
-	genericCandidateExpressionInvalid bool
+	kind             declarationContextKind
+	last             string
+	typeContext      bool
+	conditionals     []declarationConditionalStage
+	genericPurpose   declarationGenericPurpose
+	parameterStage   declarationParameterStage
+	candidateInvalid bool
 }
 
 type declarationStructure struct {
-	contexts []declarationContext
+	contexts    []declarationContext
+	symbolKind  core.SymbolKind
+	heritage    declarationHeritagePhase
+	genericSeen bool
 }
 
-func newDeclarationStructure() declarationStructure {
-	return declarationStructure{contexts: []declarationContext{{kind: declarationRoot, last: "value"}}}
+func newDeclarationStructure(kind core.SymbolKind) declarationStructure {
+	return declarationStructure{
+		contexts:   []declarationContext{{kind: declarationRoot, last: "value"}},
+		symbolKind: kind,
+	}
 }
 
 func (s *declarationStructure) current() *declarationContext {
 	return &s.contexts[len(s.contexts)-1]
 }
 
-func (s *declarationStructure) open(kind declarationContextKind, token string) {
+func (s *declarationStructure) atRoot() bool {
+	return len(s.contexts) == 1
+}
+
+func (s *declarationStructure) open(kind declarationContextKind, token string) bool {
+	if s.atRoot() && !s.inHeritageOperand() {
+		return false
+	}
 	s.contexts = append(s.contexts, declarationContext{
-		kind: kind, last: token, typeContext: s.current().typeContext || kind == declarationGeneric,
+		kind: kind, last: token, typeContext: s.current().typeContext,
 	})
+	return true
 }
 
 func (s *declarationStructure) close(kind declarationContextKind) bool {
-	for len(s.contexts) > 1 && s.current().kind == declarationGeneric && s.current().tentativeGeneric {
-		if s.current().genericCandidateExpressionInvalid || !s.current().canClose() {
+	for len(s.contexts) > 1 && s.current().kind == declarationGeneric && s.current().genericPurpose == declarationGenericCandidate {
+		if s.current().candidateInvalid || !s.current().canClose() {
 			return false
 		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
-		s.mark("value")
+		if !s.markValue() {
+			return false
+		}
 	}
 	if len(s.contexts) == 1 || s.current().kind != kind || !s.current().canClose() {
 		return false
 	}
 	s.contexts = s.contexts[:len(s.contexts)-1]
-	s.mark("value")
-	return true
+	return s.markValue()
 }
 
-func (s *declarationStructure) mark(token string) {
+func (s *declarationStructure) markValue() bool {
 	current := s.current()
-	if token == "value" {
-		current.completeConditionalValue()
+	if s.atRoot() && !s.inHeritageOperand() {
+		return false
 	}
-	current.last = token
+	current.completeConditionalValue()
+	current.last = "value"
+	return true
 }
 
 func (c *declarationContext) completeConditionalValue() {
@@ -99,91 +135,162 @@ func (c *declarationContext) reduceCompletedConditionals() {
 	}
 }
 
-func (s *declarationStructure) markKeyword(keyword string) {
+func (s *declarationStructure) markKeyword(keyword string) bool {
 	current := s.current()
 	if current.last == "." {
-		s.mark("value")
-		return
+		return s.markValue()
 	}
-	if keyword == "extends" && current.kind == declarationBracket && current.typeContext && current.last == "value" {
-		if len(current.conditionals) == 0 || current.conditionals[len(current.conditionals)-1] == declarationConditionalTrueComplete ||
-			current.conditionals[len(current.conditionals)-1] == declarationConditionalFalseComplete {
-			current.conditionals = append(current.conditionals, declarationConditionalCondition)
+	if s.atRoot() {
+		return s.acceptHeritageKeyword(keyword)
+	}
+	if keyword == "extends" && current.typeContext && current.last == "value" {
+		if current.genericPurpose == declarationGenericParameters && current.parameterStage == declarationParameterName {
+			current.parameterStage = declarationParameterConstraint
+			current.last = keyword
+			return true
 		}
+		current.conditionals = append(current.conditionals, declarationConditionalCondition)
+		current.last = keyword
+		return true
 	}
 	current.last = keyword
+	return true
 }
 
-func (s *declarationStructure) markQuestion() {
-	current := s.current()
-	if current.kind == declarationBracket && current.typeContext && current.last == "value" {
-		if len(current.conditionals) == 0 {
-			s.markGenericCandidateExpressionInvalid()
-			return
+func (s *declarationStructure) acceptHeritageKeyword(keyword string) bool {
+	root := s.current()
+	switch keyword {
+	case "extends":
+		if s.heritage != declarationBeforeHeritage {
+			return false
 		}
+		s.heritage = declarationExtendsHeritage
+	case "implements":
+		if s.symbolKind != core.SymbolKindClass || s.heritage == declarationImplementsHeritage ||
+			s.heritage == declarationExtendsHeritage && incompleteDeclarationToken(root.last) {
+			return false
+		}
+		s.heritage = declarationImplementsHeritage
+	default:
+		return false
+	}
+	root.last = keyword
+	return true
+}
+
+func (s *declarationStructure) markQuestion() bool {
+	current := s.current()
+	if current.typeContext && current.last == "value" && len(current.conditionals) > 0 {
 		last := len(current.conditionals) - 1
 		if current.conditionals[last] == declarationConditionalCondition {
 			current.conditionals[last] = declarationConditionalTrue
+			current.last = "?"
+			return true
 		}
 	}
+	if current.typeContext && current.last == "value" &&
+		(current.kind == declarationBracket || current.kind == declarationBrace) {
+		s.markGenericCandidateInvalid()
+		return true
+	}
+	if incompleteDeclarationToken(current.last) {
+		return false
+	}
 	current.last = "?"
+	return true
 }
 
-func (s *declarationStructure) markGenericCandidateExpressionInvalid() {
+func (s *declarationStructure) markGenericCandidateInvalid() {
 	for i := len(s.contexts) - 1; i >= 0; i-- {
 		if s.contexts[i].kind == declarationGeneric {
-			s.contexts[i].genericCandidateExpressionInvalid = true
+			s.contexts[i].candidateInvalid = true
 			return
 		}
 	}
 }
 
-func (s *declarationStructure) markColon() {
+func (s *declarationStructure) markColon() bool {
 	current := s.current()
 	current.reduceCompletedConditionals()
 	if len(current.conditionals) > 0 {
 		last := len(current.conditionals) - 1
-		if current.conditionals[last] == declarationConditionalTrueComplete {
-			current.conditionals[last] = declarationConditionalFalse
+		if current.conditionals[last] != declarationConditionalTrueComplete {
+			return false
 		}
+		current.conditionals[last] = declarationConditionalFalse
+	} else if incompleteDeclarationToken(current.last) {
+		return false
 	}
 	current.last = ":"
+	return true
 }
 
-func (s *declarationStructure) atRoot() bool {
-	return s.current().kind == declarationRoot
-}
-
-func (s *declarationStructure) openGeneric() {
-	currentKind := s.current().kind
-	if currentKind == declarationRoot || currentKind == declarationGeneric {
-		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<", typeContext: true})
-	} else if s.current().last == "value" {
-		s.contexts = append(s.contexts, declarationContext{
-			kind: declarationGeneric, last: "<", typeContext: true, tentativeGeneric: true,
-		})
+func (s *declarationStructure) markOperator(token string) bool {
+	current := s.current()
+	if token == "=" && current.genericPurpose == declarationGenericParameters {
+		if current.parameterStage == declarationParameterDefault || incompleteDeclarationToken(current.last) {
+			return false
+		}
+		current.parameterStage = declarationParameterDefault
 	}
+	current.last = token
+	return true
+}
+
+func (s *declarationStructure) openGeneric() bool {
+	current := s.current()
+	purpose := declarationGenericTypeList
+	switch {
+	case s.atRoot() && s.heritage == declarationBeforeHeritage && !s.genericSeen:
+		purpose = declarationGenericParameters
+		s.genericSeen = true
+	case s.atRoot() && s.inHeritageOperand() && current.last == "value":
+	case current.kind == declarationGeneric:
+	case current.last == "value":
+		purpose = declarationGenericCandidate
+	default:
+		return false
+	}
+	s.contexts = append(s.contexts, declarationContext{
+		kind: declarationGeneric, last: "<", typeContext: true, genericPurpose: purpose,
+	})
+	return true
 }
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
 	current.reduceCompletedConditionals()
-	if len(current.conditionals) != 0 || current.requiresListOperand() && !current.hasListOperand() {
+	if len(current.conditionals) != 0 {
+		return false
+	}
+	if s.atRoot() {
+		if !s.heritageAllowsList() || incompleteDeclarationToken(current.last) {
+			return false
+		}
+		current.last = ","
+		return true
+	}
+	if current.requiresListOperand() && !current.hasListOperand() {
 		return false
 	}
 	current.last = ","
+	if current.genericPurpose == declarationGenericParameters {
+		current.parameterStage = declarationParameterName
+	}
 	return true
 }
 
+func (s *declarationStructure) heritageAllowsList() bool {
+	return s.symbolKind == core.SymbolKindInterface && s.heritage == declarationExtendsHeritage ||
+		s.symbolKind == core.SymbolKindClass && s.heritage == declarationImplementsHeritage
+}
+
+func (s *declarationStructure) inHeritageOperand() bool {
+	return s.heritage == declarationExtendsHeritage || s.heritage == declarationImplementsHeritage
+}
+
 func (c *declarationContext) requiresListOperand() bool {
-	switch c.kind {
-	case declarationRoot, declarationGeneric, declarationParen, declarationBrace:
-		return true
-	case declarationBracket:
-		return false
-	default:
-		return true
-	}
+	return c.kind != declarationBracket
 }
 
 func (c *declarationContext) hasListOperand() bool {
@@ -224,117 +331,17 @@ func (s *declarationStructure) closeGeneric() bool {
 	if current.kind != declarationGeneric || !current.canClose() {
 		return false
 	}
+	purpose := current.genericPurpose
 	s.contexts = s.contexts[:len(s.contexts)-1]
-	s.mark("value")
-	return true
+	if s.atRoot() && purpose == declarationGenericParameters {
+		s.current().last = "value"
+		return true
+	}
+	return s.markValue()
 }
 
-func declarationBodyOffset(ctx context.Context, source string, start, end int) (int, bool, error) {
-	structure := newDeclarationStructure()
-	for i := start; i < end; {
-		if err := scanContext(ctx, i-start); err != nil {
-			return 0, false, err
-		}
-		next, kind, complete, err := scanLexicalSpan(ctx, source, i, end)
-		if err != nil {
-			return 0, false, err
-		}
-		if kind != lexicalSpanNone {
-			if !complete {
-				return 0, false, nil
-			}
-			if kind == lexicalSpanLiteral {
-				structure.mark("value")
-			}
-			i = next
-			continue
-		}
-		if keyword, ok := declarationKeywordAt(source, i, end); ok {
-			structure.markKeyword(keyword)
-			i += len(keyword)
-			continue
-		}
-
-		switch source[i] {
-		case '(':
-			structure.open(declarationParen, "(")
-		case ')':
-			if !structure.close(declarationParen) {
-				return 0, false, nil
-			}
-		case '[':
-			structure.open(declarationBracket, "[")
-		case ']':
-			if !structure.close(declarationBracket) {
-				return 0, false, nil
-			}
-		case '<':
-			structure.openGeneric()
-		case '>':
-			if structure.current().kind == declarationGeneric {
-				if i > start && source[i-1] == '=' {
-					structure.mark("=>")
-				} else if !structure.closeGeneric() {
-					return 0, false, nil
-				}
-			} else if structure.atRoot() {
-				if i <= start || source[i-1] != '=' {
-					return 0, false, nil
-				}
-				structure.mark("=>")
-			}
-		case '{':
-			if structure.atRoot() {
-				if incompleteDeclarationToken(structure.current().last) {
-					return 0, false, nil
-				}
-				return i, true, nil
-			}
-			structure.open(declarationBrace, "{")
-		case '}':
-			if !structure.close(declarationBrace) {
-				return 0, false, nil
-			}
-		case ';':
-			if structure.atRoot() {
-				return 0, false, nil
-			}
-			structure.mark("value")
-		case ',':
-			if !structure.acceptSeparator() {
-				return 0, false, nil
-			}
-		case '?':
-			structure.markQuestion()
-		case ':':
-			structure.markColon()
-		case '=', '&', '|', '.':
-			structure.mark(string(source[i]))
-		default:
-			r, _ := utf8.DecodeRuneInString(source[i:end])
-			if !unicode.IsSpace(r) {
-				structure.mark("value")
-			}
-		}
-		_, size := utf8.DecodeRuneInString(source[i:end])
-		if size == 0 {
-			break
-		}
-		i += size
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, false, err
-	}
-	return 0, false, nil
-}
-
-func declarationKeywordAt(source string, start, end int) (string, bool) {
-	for _, keyword := range []string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"} {
-		if strings.HasPrefix(source[start:end], keyword) && tokenBoundary(source, start, keyword) {
-			return keyword, true
-		}
-	}
-	return "", false
+func (s *declarationStructure) canOpenBody() bool {
+	return s.atRoot() && !incompleteDeclarationToken(s.current().last)
 }
 
 func incompleteDeclarationToken(token string) bool {

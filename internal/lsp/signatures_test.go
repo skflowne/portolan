@@ -100,7 +100,10 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "Broken", want: "class Broken"},
+		{name: "DuplicateGenericOperand", want: "class DuplicateGenericOperand"},
+		{name: "Broken", want: "class Broken<T = C>"},
+		{name: "Dup", want: "class Dup"},
+		{name: "Regex", want: "class Regex"},
 		{name: "MissingGenericOperand", want: "class MissingGenericOperand"},
 		{name: "MissingConstraintOperand", want: "class MissingConstraintOperand<T extends any, A>"},
 		{name: "DuplicateCallOperand", want: "class DuplicateCallOperand"},
@@ -319,6 +322,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Tupled<T extends [string?]>",
 		},
 		{
+			name:   "conditional generic default",
+			source: "class Defaulted<T = A extends B ? C : D> {}",
+			symbol: core.Symbol{Name: "Defaulted", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
+			want:   "class Defaulted<T = A extends B ? C : D>",
+		},
+		{
 			name:   "conditional tuple operand",
 			source: "class Tupled<T extends [A extends B ? C : D]> {}",
 			symbol: core.Symbol{Name: "Tupled", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 48}}},
@@ -463,6 +472,51 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "incomplete nested conditional tuple operand",
 			source: "class Broken<T extends [A extends B ? C extends D ? E : F]> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 62}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing colon",
+			source: "class Broken<T = A extends B ? C> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 36}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing true arm",
+			source: "class Broken<T = A extends B ? : D> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+		},
+		{
+			name:   "incomplete conditional generic default missing false arm",
+			source: "class Broken<T = A extends B ? C :> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+		},
+		{
+			name:   "duplicate class extends clause",
+			source: "class Dup extends Base extends A {}",
+			symbol: core.Symbol{Name: "Dup", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 35}}},
+		},
+		{
+			name:   "class heritage order",
+			source: "class Broken implements A extends Base {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
+			name:   "duplicate class implements clause",
+			source: "class Broken implements A implements B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
+		},
+		{
+			name:   "interface implements clause",
+			source: "interface Broken implements A {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 32}}},
+		},
+		{
+			name:   "duplicate interface extends clause",
+			source: "interface Broken extends A extends B {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindInterface, Range: core.Range{End: core.Position{Character: 39}}},
+		},
+		{
+			name:   "ambiguous slash heritage",
+			source: "class Regex extends /x{1}/.constructor {}",
+			symbol: core.Symbol{Name: "Regex", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 41}}},
 		},
 	}
 
