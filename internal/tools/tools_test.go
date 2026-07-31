@@ -571,16 +571,23 @@ func TestFindReferences_DefaultCap(t *testing.T) {
 
 func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 	file := "/repo/main.go"
-	provider := &core.StubProvider{
-		Symbols: map[string][]core.SymbolNode{
-			file: {
-				symbolNode(core.Symbol{
-					Name: "Outer", Kind: "class", File: file,
-					Range: rng(0, 0, 10, 0), SelRange: rng(0, 6, 0, 11),
-					Signature: "class Outer", Detail: "document symbol detail",
-				}, symbolNode(core.Symbol{Name: "Inner", Kind: "method", File: file, Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9), Signature: "Inner(): void"})),
+	outer := core.Symbol{
+		Name: "Outer", Kind: "class", File: file,
+		Range: rng(0, 0, 10, 0), SelRange: rng(0, 6, 0, 11),
+		Signature: "document symbol Outer", Detail: "document symbol detail",
+	}
+	inner := core.Symbol{
+		Name: "Inner", Kind: "method", File: file,
+		Range: rng(1, 0, 2, 0), SelRange: rng(1, 4, 1, 9),
+		Signature: "document symbol Inner",
+	}
+	provider := &signatureResultProvider{
+		StubProvider: &core.StubProvider{
+			Symbols: map[string][]core.SymbolNode{
+				file: {symbolNode(outer, symbolNode(inner))},
 			},
 		},
+		signatures: []string{"class Outer", "Inner(): void"},
 	}
 	logger := &capturingLogger{}
 	gen := &core.GenerationCounter{}
@@ -604,9 +611,14 @@ func TestGetOutline_FlattensAndStampsFreshness(t *testing.T) {
 	if out.Symbols[1].Name != "Inner" || out.Symbols[1].Depth != 1 {
 		t.Fatalf("expected Inner at depth 1 second, got %+v", out.Symbols[1])
 	}
-	if out.Symbols[0].Signature != "class Outer" || out.Symbols[0].Detail != "document symbol detail" ||
-		out.Symbols[1].Signature != "Inner(): void" || out.Symbols[1].Detail != "" {
-		t.Fatalf("flattened signature/detail fields = %+v, want independent provider values", out.Symbols)
+	wantOuter := outer
+	wantOuter.Signature = provider.signatures[0]
+	wantInner := inner
+	wantInner.Signature = provider.signatures[1]
+	gotSymbols := []core.Symbol{out.Symbols[0].Symbol, out.Symbols[1].Symbol}
+	wantSymbols := []core.Symbol{wantOuter, wantInner}
+	if !reflect.DeepEqual(gotSymbols, wantSymbols) {
+		t.Fatalf("flattened canonical symbols = %+v, want %+v", gotSymbols, wantSymbols)
 	}
 	if out.Freshness.Generation != 2 {
 		t.Fatalf("expected Freshness.Generation=2, got %d", out.Freshness.Generation)
