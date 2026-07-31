@@ -79,6 +79,10 @@ func (s *declarationStructure) atRoot() bool {
 	return len(s.contexts) == 1
 }
 
+func (s *declarationStructure) awaitingArrow() bool {
+	return s.current().last == "pendingArrow"
+}
+
 func (s *declarationStructure) open(kind declarationContextKind, token string) bool {
 	if s.atRoot() && !s.inHeritageOperand() {
 		return false
@@ -114,7 +118,7 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 
 func (s *declarationStructure) markValue() bool {
 	current := s.current()
-	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
+	if current.last == "optional" || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	current.completeConditionalValue()

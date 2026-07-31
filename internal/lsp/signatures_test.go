@@ -501,6 +501,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
 		},
 		{
+			name:   "optional function generic default keyword instead of arrow",
+			source: "class Broken<T = (value?: string) extends U> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 47}}},
+		},
+		{
 			name:   "conditional-like parenthesized type default",
 			source: "class Broken<T = (A ? B)> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 28}}},
