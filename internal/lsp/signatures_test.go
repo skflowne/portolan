@@ -283,6 +283,24 @@ func TestExtractDeclarationHeader(t *testing.T) {
 	}
 }
 
+func TestDeclarationContextualKeywordsDriveRecognitionAndCompletion(t *testing.T) {
+	want := [...]string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"}
+	if len(declarationContextualKeywords) != len(want) {
+		t.Fatalf("contextual keywords = %q, want %q", declarationContextualKeywords, want)
+	}
+	for i, keyword := range want {
+		if declarationContextualKeywords[i] != keyword {
+			t.Fatalf("contextual keywords = %q, want %q", declarationContextualKeywords, want)
+		}
+		if got, ok := declarationKeywordAt(keyword, 0, len(keyword)); !ok || got != keyword {
+			t.Errorf("declarationKeywordAt(%q) = (%q, %v), want (%q, true)", keyword, got, ok, keyword)
+		}
+		if !incompleteDeclarationToken(keyword) {
+			t.Errorf("incompleteDeclarationToken(%q) = false, want true", keyword)
+		}
+	}
+}
+
 func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 	tests := []struct {
 		name   string

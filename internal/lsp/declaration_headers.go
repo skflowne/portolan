@@ -256,8 +256,10 @@ func declarationBodyOffset(ctx context.Context, source string, start, end int) (
 	return 0, false, nil
 }
 
+var declarationContextualKeywords = [...]string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"}
+
 func declarationKeywordAt(source string, start, end int) (string, bool) {
-	for _, keyword := range []string{"extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract"} {
+	for _, keyword := range declarationContextualKeywords {
 		if strings.HasPrefix(source[start:end], keyword) && tokenBoundary(source, start, keyword) {
 			return keyword, true
 		}
@@ -266,9 +268,11 @@ func declarationKeywordAt(source string, start, end int) (string, bool) {
 }
 
 func incompleteDeclarationToken(token string) bool {
+	if _, ok := declarationKeywordAt(token, 0, len(token)); ok {
+		return true
+	}
 	switch token {
-	case "extends", "implements", "keyof", "typeof", "infer", "readonly", "new", "abstract",
-		"(", "[", "{", "<", ",", "?", ":", "=", "=>", "&", "|", ".":
+	case "(", "[", "{", "<", ",", "?", ":", "=", "=>", "&", "|", ".":
 		return true
 	default:
 		return false
