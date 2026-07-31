@@ -18,8 +18,9 @@ const (
 )
 
 type declarationContext struct {
-	kind declarationContextKind
-	last string
+	kind        declarationContextKind
+	last        string
+	typeContext bool
 	// Expression contexts treat an unmatched generic candidate as a relational operator.
 	tentativeGeneric bool
 }
@@ -37,7 +38,9 @@ func (s *declarationStructure) current() *declarationContext {
 }
 
 func (s *declarationStructure) open(kind declarationContextKind, token string) {
-	s.contexts = append(s.contexts, declarationContext{kind: kind, last: token})
+	s.contexts = append(s.contexts, declarationContext{
+		kind: kind, last: token, typeContext: s.current().typeContext || kind == declarationGeneric,
+	})
 }
 
 func (s *declarationStructure) close(kind declarationContextKind) bool {
@@ -62,7 +65,7 @@ func (s *declarationStructure) mark(token string) {
 
 func (s *declarationStructure) markQuestion() {
 	current := s.current()
-	if current.kind != declarationBracket || current.last != "value" {
+	if current.kind != declarationBracket || !current.typeContext || current.last != "value" {
 		current.last = "?"
 	}
 }
@@ -74,9 +77,11 @@ func (s *declarationStructure) atRoot() bool {
 func (s *declarationStructure) openGeneric() {
 	currentKind := s.current().kind
 	if currentKind == declarationRoot || currentKind == declarationGeneric {
-		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<"})
+		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<", typeContext: true})
 	} else if s.current().last == "value" {
-		s.contexts = append(s.contexts, declarationContext{kind: declarationGeneric, last: "<", tentativeGeneric: true})
+		s.contexts = append(s.contexts, declarationContext{
+			kind: declarationGeneric, last: "<", typeContext: true, tentativeGeneric: true,
+		})
 	}
 }
 

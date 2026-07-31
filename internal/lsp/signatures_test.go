@@ -426,6 +426,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			source: "class Broken<T extends { first: A,, second: A }> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 51}}},
 		},
+		{
+			name:   "incomplete conditional array operand",
+			source: "class Broken extends choose([A ?]) {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 37}}},
+		},
 	}
 
 	for _, tc := range tests {
