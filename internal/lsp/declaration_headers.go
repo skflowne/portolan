@@ -295,7 +295,7 @@ func normalizeDeclarationHeader(ctx context.Context, source string, start, end i
 			i = next
 			continue
 		case lexicalSpanLiteral:
-			if !complete {
+			if !complete || strings.ContainsAny(source[i:next], "\r\n") {
 				return "", false, nil
 			}
 			appendDeclarationSpace(&normalized, &pendingSpace)

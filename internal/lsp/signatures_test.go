@@ -315,6 +315,11 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 50}}},
 		},
 		{
+			name:   "multiline literal cannot produce one-line header",
+			source: "class Tagged<T extends `first\nsecond`> extends Base<T> {}",
+			symbol: core.Symbol{Name: "Tagged", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Line: 1, Character: 27}}},
+		},
+		{
 			name:   "unmatched generic closer",
 			source: "class Broken<T>> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 19}}},
