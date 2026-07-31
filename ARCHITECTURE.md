@@ -88,9 +88,9 @@ cap/paginate every tool · never deny grep · bounded waits everywhere · accept
 For `get_outline`, `Signature` is a compact provider-authoritative semantic summary and `Detail`
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
 provider performs a concurrency-limited hover batch. Named TypeScript classes and interfaces use
-complete canonical ranges to extract matched,
-bodyless declaration headers with generics and `extends`/`implements` clauses; malformed, anonymous,
-mismatched, or unavailable headers fall back atomically to hover. Other named symbols use their
+complete canonical ranges to extract matched, bodyless declaration headers only when one request-local
+validity state recognizes complete generic, conditional, and legal heritage structure; malformed,
+lexically ambiguous, anonymous, mismatched, or unavailable headers fall back atomically to hover. Other named symbols use their
 selection ranges; synthetic TypeScript symbols use source ranges only to locate an authoritative
 hover position, while bodyless call, construct, and index signatures use their complete declaration
 ranges. Source-range planning uses the exact text retained from `didOpen`, so it cannot mix LSP
@@ -289,8 +289,9 @@ conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI 
 compact-text primitives without provider or MCP dependencies. It does not participate in current
 tool behavior until the tool-specific assemblers adopt it. `get_outline` caps the document-symbol
 structure before requesting input-ordered signatures for retained symbols. `internal/lsp` completes
-those canonical signatures: matched class/interface headers come from the retained `didOpen`
-snapshot, while malformed or unavailable headers and other semantic summaries use hover. The MCP
+those canonical signatures: structurally complete, lexically unambiguous class/interface headers come
+from the retained `didOpen` snapshot, while malformed, ambiguous, or unavailable headers and other
+semantic summaries use hover. The MCP
 SDK continues to derive schemas from the resulting tool types, so no custom serializer or agent-facing renderer
 participates in normalization.
 
