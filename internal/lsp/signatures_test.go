@@ -108,6 +108,8 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		{name: "MissingConstraintOperand", want: "class MissingConstraintOperand<T extends any, A>"},
 		{name: "DuplicateCallOperand", want: "class DuplicateCallOperand"},
 		{name: "DuplicateObjectSeparator", want: "class DuplicateObjectSeparator<T extends {\n    first: A;\n    second: A;\n}>"},
+		{name: "RepeatedUnion", want: "class RepeatedUnion<T extends any>"},
+		{name: "RepeatedIntersection", want: "class RepeatedIntersection<T extends any>"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,6 +324,18 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Tupled<T extends [string?]>",
 		},
 		{
+			name:   "union and intersection generic constraint",
+			source: "class Combined<T extends A | B & C> {}",
+			symbol: core.Symbol{Name: "Combined", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 38}}},
+			want:   "class Combined<T extends A | B & C>",
+		},
+		{
+			name:   "prefix type operators",
+			source: "class Projected<T extends keyof A | typeof value> {}",
+			symbol: core.Symbol{Name: "Projected", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 52}}},
+			want:   "class Projected<T extends keyof A | typeof value>",
+		},
+		{
 			name:   "conditional generic default",
 			source: "class Defaulted<T = A extends B ? C : D> {}",
 			symbol: core.Symbol{Name: "Defaulted", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 43}}},
@@ -429,6 +443,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 			name:   "incomplete generic constraint",
 			source: "class Broken<T extends> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 26}}},
+		},
+		{
+			name:   "repeated union operator",
+			source: "class Broken<T extends A | | B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "repeated intersection operator",
+			source: "class Broken<T extends A & & B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
 		},
 		{
 			name:   "duplicate heritage separator",

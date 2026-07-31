@@ -79,12 +79,8 @@ func (s *declarationStructure) atRoot() bool {
 	return len(s.contexts) == 1
 }
 
-func (s *declarationStructure) awaitingArrow() bool {
-	return s.current().last == "pendingArrow"
-}
-
 func (s *declarationStructure) open(kind declarationContextKind, token string) bool {
-	if s.atRoot() && !s.inHeritageOperand() {
+	if s.current().last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	s.contexts = append(s.contexts, declarationContext{
@@ -118,7 +114,7 @@ func (s *declarationStructure) close(kind declarationContextKind) bool {
 
 func (s *declarationStructure) markValue() bool {
 	current := s.current()
-	if current.last == "optional" || s.atRoot() && !s.inHeritageOperand() {
+	if current.last == "optional" || current.last == "pendingArrow" || s.atRoot() && !s.inHeritageOperand() {
 		return false
 	}
 	current.completeConditionalValue()
@@ -148,6 +144,9 @@ func (c *declarationContext) reduceCompletedConditionals() {
 
 func (s *declarationStructure) markKeyword(keyword string) bool {
 	current := s.current()
+	if current.last == "pendingArrow" {
+		return false
+	}
 	if current.last == "." {
 		return s.markValue()
 	}
@@ -258,6 +257,9 @@ func (s *declarationStructure) markOperator(token string) bool {
 		current.last = token
 		return true
 	}
+	if (token == "&" || token == "|") && current.last == token {
+		return false
+	}
 	if token == "=" && current.genericPurpose == declarationGenericParameters {
 		if current.parameterStage == declarationParameterDefault || incompleteDeclarationToken(current.last) {
 			return false
@@ -291,6 +293,9 @@ func (s *declarationStructure) openGeneric() bool {
 
 func (s *declarationStructure) acceptSeparator() bool {
 	current := s.current()
+	if current.last == "pendingArrow" {
+		return false
+	}
 	current.reduceCompletedConditionals()
 	if len(current.conditionals) != 0 {
 		return false

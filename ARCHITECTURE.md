@@ -89,8 +89,9 @@ For `get_outline`, `Signature` is a compact provider-authoritative semantic summ
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
 provider performs a concurrency-limited hover batch. Named TypeScript classes and interfaces use
 complete canonical ranges to extract matched, bodyless declaration headers only when one request-local
-validity state recognizes complete generic, conditional, and legal heritage structure; malformed,
-lexically ambiguous, anonymous, mismatched, or unavailable headers fall back atomically to hover. Other named symbols use their
+transition owner recognizes every token's validity effect and complete generic, conditional, operator,
+function-arrow, and legal heritage structure; malformed, lexically ambiguous, anonymous, mismatched,
+or unavailable headers fall back atomically to hover. Other named symbols use their
 selection ranges; synthetic TypeScript symbols use source ranges only to locate an authoritative
 hover position, while bodyless call, construct, and index signatures use their complete declaration
 ranges. Source-range planning uses the exact text retained from `didOpen`, so it cannot mix LSP
