@@ -295,6 +295,12 @@ func TestExtractDeclarationHeader(t *testing.T) {
 			want:   "class Selected extends (a < b ? A : B)",
 		},
 		{
+			name:   "relational expression with generic optional tuple",
+			source: "class Derived extends choose(A < Foo<[string?]>) {}",
+			symbol: core.Symbol{Name: "Derived", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 51}}},
+			want:   "class Derived extends choose(A < Foo<[string?]>)",
+		},
+		{
 			name:   "nested generic heritage expression",
 			source: "class Nested extends Base<Outer<Inner>, Pair<A, B>> {}",
 			symbol: core.Symbol{Name: "Nested", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 54}}},

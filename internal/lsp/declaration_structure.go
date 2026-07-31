@@ -33,8 +33,8 @@ type declarationContext struct {
 	typeContext  bool
 	conditionals []declarationConditionalStage
 	// Expression contexts treat an unmatched generic candidate as a relational operator.
-	tentativeGeneric           bool
-	tentativeExpressionInvalid bool
+	tentativeGeneric                  bool
+	genericCandidateExpressionInvalid bool
 }
 
 type declarationStructure struct {
@@ -57,7 +57,7 @@ func (s *declarationStructure) open(kind declarationContextKind, token string) {
 
 func (s *declarationStructure) close(kind declarationContextKind) bool {
 	for len(s.contexts) > 1 && s.current().kind == declarationGeneric && s.current().tentativeGeneric {
-		if s.current().tentativeExpressionInvalid || !s.current().canClose() {
+		if s.current().genericCandidateExpressionInvalid || !s.current().canClose() {
 			return false
 		}
 		s.contexts = s.contexts[:len(s.contexts)-1]
@@ -118,7 +118,7 @@ func (s *declarationStructure) markQuestion() {
 	current := s.current()
 	if current.kind == declarationBracket && current.typeContext && current.last == "value" {
 		if len(current.conditionals) == 0 {
-			s.markTentativeExpressionInvalid()
+			s.markGenericCandidateExpressionInvalid()
 			return
 		}
 		last := len(current.conditionals) - 1
@@ -129,10 +129,10 @@ func (s *declarationStructure) markQuestion() {
 	current.last = "?"
 }
 
-func (s *declarationStructure) markTentativeExpressionInvalid() {
+func (s *declarationStructure) markGenericCandidateExpressionInvalid() {
 	for i := len(s.contexts) - 1; i >= 0; i-- {
-		if s.contexts[i].tentativeGeneric {
-			s.contexts[i].tentativeExpressionInvalid = true
+		if s.contexts[i].kind == declarationGeneric {
+			s.contexts[i].genericCandidateExpressionInvalid = true
 			return
 		}
 	}
