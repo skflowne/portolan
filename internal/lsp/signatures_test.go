@@ -110,6 +110,8 @@ func TestSymbolSignaturesMalformedDeclarationUsesHover(t *testing.T) {
 		{name: "DuplicateObjectSeparator", want: "class DuplicateObjectSeparator<T extends {\n    first: A;\n    second: A;\n}>"},
 		{name: "RepeatedUnion", want: "class RepeatedUnion<T extends any>"},
 		{name: "RepeatedIntersection", want: "class RepeatedIntersection<T extends any>"},
+		{name: "MixedUnionIntersection", want: "class MixedUnionIntersection<T extends any>"},
+		{name: "MixedIntersectionUnion", want: "class MixedIntersectionUnion<T extends any>"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -452,6 +454,16 @@ func TestExtractDeclarationHeaderFallsBackAtomically(t *testing.T) {
 		{
 			name:   "repeated intersection operator",
 			source: "class Broken<T extends A & & B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent union and intersection operators",
+			source: "class Broken<T extends A | & B> {}",
+			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
+		},
+		{
+			name:   "adjacent intersection and union operators",
+			source: "class Broken<T extends A & | B> {}",
 			symbol: core.Symbol{Name: "Broken", Kind: core.SymbolKindClass, Range: core.Range{End: core.Position{Character: 34}}},
 		},
 		{
