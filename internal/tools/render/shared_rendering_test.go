@@ -40,6 +40,15 @@ func TestLocationsRendersNoLinesForNoLocations(t *testing.T) {
 	}
 }
 
+func TestFileLineNamesTheSubjectFileOnceAndEscapesIt(t *testing.T) {
+	if got, want := render.FileLine("/project/src/geometry.ts"), "file /project/src/geometry.ts"; got != want {
+		t.Fatalf("FileLine() = %q, want %q", got, want)
+	}
+	if got, want := render.FileLine("/project/café 🚀\n\x1b[31m.ts"), `file /project/café 🚀\n\u001b[31m.ts`; got != want {
+		t.Fatalf("FileLine() = %q, want %q", got, want)
+	}
+}
+
 func TestStateMarkersAreInlineSafe(t *testing.T) {
 	if got, want := render.Empty("symbol missing\ntry grep"), `empty: symbol missing\ntry grep`; got != want {
 		t.Fatalf("Empty() = %q, want %q", got, want)
