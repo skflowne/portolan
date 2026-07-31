@@ -15,7 +15,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skflowne/portolan/eval/testinfra"
-	"github.com/skflowne/portolan/internal/tools"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
@@ -73,14 +72,7 @@ func startTelemetryDaemon(t *testing.T, endpoint string) (*testinfra.Daemon, *mc
 
 func callOneTelemetryTool(t *testing.T, sess *mcp.ClientSession) {
 	t.Helper()
-	want := loadPinnedContract(t)
-	var out tools.GetOutlineOutput
-	callInto(t, sess, "get_outline", map[string]any{
-		"file": filepath.Join(testinfra.FixtureRoot(), "src", "geometry.ts"),
-	}, expectedStructuredOutput(t, want, "outline_geometry"), &out)
-	if !out.Found {
-		t.Fatalf("expected outline result: %+v", out)
-	}
+	assertOutlineText(t, sess, filepath.Join(testinfra.FixtureRoot(), "src", "geometry.ts"), "outline_geometry")
 }
 
 func stopTelemetryDaemon(t *testing.T, d *testinfra.Daemon, sess *mcp.ClientSession) {

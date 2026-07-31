@@ -1,0 +1,10 @@
+file src/geometry.ts
+ranges 0-based
+
+interface Shape [3:0-5:1]
+  area(): number [4:2-4:17]
+
+class Circle implements Shape [7:0-13:1]
+  constructor(radius: number) [8:2-8:48]
+
+4 symbols; truncated: more symbols exist

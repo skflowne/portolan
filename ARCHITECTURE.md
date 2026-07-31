@@ -255,6 +255,7 @@ flowchart LR
     tel --> core
     tools --> core
     tools --> path
+    tools --> render
     render --> core
     mcp --> core
     mcp --> tools
@@ -286,13 +287,19 @@ The three current navigation tools depend only on `core.LanguageProvider` and it
 atoms. `internal/lsp` keeps JSON-RPC transport, operation orchestration, and concrete raw-result
 conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI identity owner.
 `internal/tools/render` projects canonical positions, ranges, symbols, and locations into shared
-compact-text primitives without provider or MCP dependencies. It does not participate in current
-tool behavior until the tool-specific assemblers adopt it. `get_outline` caps the document-symbol
+compact-text primitives without provider or MCP dependencies. `get_outline` is the first tool to
+assemble those primitives: `tools.RenderOutline` is the sole author of its agent-facing text, and
+`internal/mcp` carries that text verbatim as the single content item of an untyped tool result, so
+no formatter or escaping decision lives at the transport. `find_definition` and `find_references`
+still answer with SDK-derived structured JSON. `get_outline` caps the document-symbol
 structure before requesting input-ordered signatures for retained symbols. `internal/lsp` completes
 those canonical signatures: matched class/interface headers come from the retained `didOpen`
-snapshot, while malformed or unavailable headers and other semantic summaries use hover. The MCP
-SDK continues to derive schemas from the resulting tool types, so no custom serializer or agent-facing renderer
-participates in normalization.
+snapshot, while malformed or unavailable headers and other semantic summaries use hover. Rendering
+consumes canonical results and never participates in normalization; selection ranges, provider
+`Detail`, and the freshness stamp stay in the typed result for behavior, provider navigation,
+telemetry, and tests rather than reaching routine agent-facing text. `Detail` consequently has no
+current agent-facing consumer: it remains a normalized provider fact, not a second declaration
+string for a renderer to fall back to.
 
 [`PROVIDER_NORMALIZATION.md`](./PROVIDER_NORMALIZATION.md) is the canonical detailed contract for
 this boundary, including its complete inventory, ownership table, current null/empty/malformed/error
