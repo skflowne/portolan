@@ -107,29 +107,10 @@ func normalizeContractPaths(t *testing.T, contract *pinnedContract) {
 	normalizeLocations(contract.ReferencesCircle.Locations)
 }
 
-// fixtureRelativeText rewrites every absolute fixture path in an agent-facing
-// text response to its fixture-relative slash form, so pinned text compares
-// identically in any checkout. Paths reach the response through the header and
-// through state-marker messages alike, so the rewrite is not header-only.
+// fixtureRelativeText removes checkout-specific fixture roots from text snapshots.
 func fixtureRelativeText(t *testing.T, text string) string {
 	t.Helper()
-	root := fixtureRoot(t) + string(filepath.Separator)
-	var rewritten strings.Builder
-	for {
-		start := strings.Index(text, root)
-		if start < 0 {
-			rewritten.WriteString(text)
-			return rewritten.String()
-		}
-		rewritten.WriteString(text[:start])
-		rest := text[start+len(root):]
-		end := strings.IndexAny(rest, " \n")
-		if end < 0 {
-			end = len(rest)
-		}
-		rewritten.WriteString(filepath.ToSlash(rest[:end]))
-		text = rest[end:]
-	}
+	return strings.ReplaceAll(text, fixtureRoot(t)+string(filepath.Separator), "")
 }
 
 func expectedText(t *testing.T, name string) string {
