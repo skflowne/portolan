@@ -16,15 +16,15 @@ type FindDefinitionInput struct {
 
 // FindDefinitionOutput is the output schema for find_definition.
 type FindDefinitionOutput struct {
-	// Found is true iff at least one definition location was returned.
+	// Found is true iff at least one enriched definition was returned.
 	// Both "symbol name did not resolve" and "resolved but no definition
 	// exists" are honest, non-error results: Found is false and Message
 	// explains why.
-	Found     bool            `json:"found"`
-	Locations []core.Location `json:"locations"`
-	Truncated bool            `json:"truncated"`
-	Freshness core.Freshness  `json:"freshness"`
-	Message   string          `json:"message,omitempty"`
+	Found       bool              `json:"found"`
+	Definitions []core.Definition `json:"definitions"`
+	Truncated   bool              `json:"truncated"`
+	Freshness   core.Freshness    `json:"freshness"`
+	Message     string            `json:"message,omitempty"`
 	// Error is set for input-validation or provider failures. Both are soft:
 	// the call never panics or returns a Go error for them.
 	Error string `json:"error,omitempty"`
@@ -75,12 +75,27 @@ func (t *Tools) FindDefinition(ctx context.Context, in FindDefinitionInput) (Fin
 			return
 		}
 
+		truncated := false
 		if cap := t.Cfg.Cap(); len(locs) > cap {
 			locs = locs[:cap]
-			out.Truncated = true
+			truncated = true
+		}
+		definitions, err := runProviderStage(ctx, func(ctx context.Context) ([]core.Definition, error) {
+			return t.Provider.DefinitionSources(ctx, locs)
+		})
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("failed to load definition source for %q", in.Symbol)
+			return
+		}
+		if len(definitions) != len(locs) {
+			out.Error = fmt.Sprintf("provider returned %d definitions for %d locations", len(definitions), len(locs))
+			out.Message = fmt.Sprintf("failed to load definition source for %q", in.Symbol)
+			return
 		}
 		out.Found = true
-		out.Locations = locs
+		out.Definitions = definitions
+		out.Truncated = truncated
 	})
 	return out, nil
 }
@@ -90,5 +105,5 @@ func (o *FindDefinitionOutput) setFreshness(fresh core.Freshness) {
 }
 
 func (o *FindDefinitionOutput) telemetryFields() (int, bool, string) {
-	return len(o.Locations), o.Truncated, o.Error
+	return len(o.Definitions), o.Truncated, o.Error
 }

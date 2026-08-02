@@ -153,6 +153,14 @@ func TestToolCancellationStagesRemainSoftAndEmitOnce(t *testing.T) {
 			},
 		},
 		{
+			name:  "definition_source_stage",
+			stage: "definition_sources",
+			call: func(ctx context.Context, tl *Tools) (string, error) {
+				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: "/repo/main.go", Symbol: "Target"})
+				return out.Error, err
+			},
+		},
+		{
 			name:  "references_symbols",
 			stage: "symbols",
 			call: func(ctx context.Context, tl *Tools) (string, error) {
@@ -277,7 +285,7 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 	}
 	definitionCall := func(ctx context.Context, tl *Tools) result {
 		out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
-		return result{out.Found, out.Truncated, len(out.Locations), out.Error, out.Message, err}
+		return result{out.Found, out.Truncated, len(out.Definitions), out.Error, out.Message, err}
 	}
 	referencesCall := func(ctx context.Context, tl *Tools) result {
 		out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
@@ -295,6 +303,7 @@ func TestPostProviderCancellationRemainsSoft(t *testing.T) {
 	}{
 		{name: "definition_symbols", cancelStage: "symbols", call: definitionCall},
 		{name: "definition_result", cancelStage: "definition", secondCalls: 1, call: definitionCall},
+		{name: "definition_sources", cancelStage: "definition_sources", secondCalls: 2, call: definitionCall},
 		{name: "references_symbols", cancelStage: "symbols", call: referencesCall},
 		{name: "references_result", cancelStage: "references", secondCalls: 1, call: referencesCall},
 		{name: "outline_symbols", cancelStage: "symbols", call: outlineCall},
@@ -407,6 +416,12 @@ func (p *cancelingResultProvider) Definition(_ context.Context, file string, _ c
 }
 
 func (p *cancelingResultProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	p.mu.Lock()
+	p.secondCalls++
+	p.mu.Unlock()
+	if p.cancelStage == "definition_sources" {
+		p.cancel()
+	}
 	definitions := make([]core.Definition, len(locations))
 	for i, location := range locations {
 		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}

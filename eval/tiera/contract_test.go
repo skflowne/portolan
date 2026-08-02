@@ -17,15 +17,13 @@ import (
 	"github.com/skflowne/portolan/internal/tools"
 )
 
-// pinnedContract is the independently authored expectation for the tools that
-// still answer with structured JSON. get_outline answers with compact text and
-// is pinned by the files under fixtures/expected instead.
+// pinnedContract is the independently authored expectation for the remaining
+// structured tool and the complete Tier A telemetry sequence. Text tools are
+// pinned by the files under fixtures/expected instead.
 type pinnedContract struct {
-	DefinitionTotalArea tools.FindDefinitionOutput `json:"definition_total_area"`
-	DefinitionRadius    tools.FindDefinitionOutput `json:"definition_radius"`
-	ReferencesCircle    tools.FindReferencesOutput `json:"references_circle"`
-	Telemetry           []expectedEvent            `json:"telemetry"`
-	raw                 map[string]any
+	ReferencesCircle tools.FindReferencesOutput `json:"references_circle"`
+	Telemetry        []expectedEvent            `json:"telemetry"`
+	raw              map[string]any
 }
 
 type expectedEvent struct {
@@ -102,8 +100,6 @@ func normalizeContractPaths(t *testing.T, contract *pinnedContract) {
 			locations[i].File = fixtureRelativePath(t, locations[i].File)
 		}
 	}
-	normalizeLocations(contract.DefinitionTotalArea.Locations)
-	normalizeLocations(contract.DefinitionRadius.Locations)
 	normalizeLocations(contract.ReferencesCircle.Locations)
 }
 
@@ -137,8 +133,6 @@ func validatePinnedContract(got, want pinnedContract) error {
 		got  any
 		want any
 	}{
-		{"definition_total_area", got.DefinitionTotalArea, want.DefinitionTotalArea},
-		{"definition_radius", got.DefinitionRadius, want.DefinitionRadius},
 		{"references_circle", got.ReferencesCircle, want.ReferencesCircle},
 	}
 	for _, check := range checks {
@@ -347,25 +341,19 @@ func TestPinnedContractRejectsMutations(t *testing.T) {
 		name   string
 		mutate func(*pinnedContract, []map[string]any)
 	}{
-		{name: "wrong same-file definition location", mutate: func(c *pinnedContract, _ []map[string]any) {
-			c.DefinitionTotalArea.Locations[0].Range.Start.Character++
-		}},
-		{name: "wrong member definition location", mutate: func(c *pinnedContract, _ []map[string]any) {
-			c.DefinitionRadius.Locations[0].Range.Start.Character++
-		}},
 		{name: "swapped reference locations", mutate: func(c *pinnedContract, _ []map[string]any) {
 			c.ReferencesCircle.Locations[2], c.ReferencesCircle.Locations[3] = c.ReferencesCircle.Locations[3], c.ReferencesCircle.Locations[2]
 		}},
 		{name: "wrong freshness", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Freshness.Generation = 1 }},
 		{name: "wrong truncation", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Truncated = true }},
 		{name: "duplicate replaces missing event", mutate: func(_ *pinnedContract, events []map[string]any) { events[2] = events[1] }},
-		{name: "swapped outline events", mutate: func(_ *pinnedContract, events []map[string]any) { events[0], events[3] = events[3], events[0] }},
+		{name: "swapped outline events", mutate: func(_ *pinnedContract, events []map[string]any) { events[0], events[8] = events[8], events[0] }},
 		{name: "wrong session tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["session_id"] = "other" }},
 		{name: "wrong graph tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["graph_mode"] = "no-graph" }},
 		{name: "wrong result size", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["result_size"] = json.Number("12") }},
 		{name: "unexpected error", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["err"] = "wrong call" }},
-		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[6], "err") }},
-		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[6]["err"] = "other failure" }},
+		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[10], "err") }},
+		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[10]["err"] = "other failure" }},
 		{name: "missing timestamp", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[0], "ts") }},
 	}
 	for _, tt := range tests {

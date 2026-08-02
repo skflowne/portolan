@@ -131,9 +131,18 @@ func assertOutlineText(t *testing.T, sess *mcp.ClientSession, file, pinned strin
 	}
 }
 
+func assertDefinitionText(t *testing.T, sess *mcp.ClientSession, file, symbol, pinned string) {
+	t.Helper()
+	got := callText(t, sess, "find_definition", map[string]any{"file": file, "symbol": symbol})
+	if want := expectedText(t, pinned); got != want {
+		t.Fatalf("%s text =\n%s\n\nwant\n%s", pinned, got, want)
+	}
+}
+
 func TestTierA(t *testing.T) {
 	daemon := startDaemon(t, "tiera", filepath.Join(t.TempDir(), "control.sock"))
 	geometry := filepath.Join(fixtureRoot(t), "src", "geometry.ts")
+	definitionUse := filepath.Join(fixtureRoot(t), "src", "definition_use.ts")
 	mainTS := filepath.Join(fixtureRoot(t), "src", "main.ts")
 	emptyTS := filepath.Join(fixtureRoot(t), "src", "empty.ts")
 	want := loadPinnedContract(t)
@@ -159,10 +168,14 @@ func TestTierA(t *testing.T) {
 
 	assertOutlineText(t, daemon.sess, geometry, "outline_geometry")
 	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, expectedStructuredOutput(t, want, "references_circle"), &got.ReferencesCircle)
-	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, expectedStructuredOutput(t, want, "definition_total_area"), &got.DefinitionTotalArea)
+	assertDefinitionText(t, daemon.sess, geometry, "totalArea", "definition_total_area")
 	// A parameter property's selection range is a nested, non-top-level one:
 	// the position every member navigation is issued at.
-	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "radius"}, expectedStructuredOutput(t, want, "definition_radius"), &got.DefinitionRadius)
+	assertDefinitionText(t, daemon.sess, geometry, "radius", "definition_radius")
+	assertDefinitionText(t, daemon.sess, definitionUse, "overloaded", "definition_overloaded")
+	assertDefinitionText(t, daemon.sess, definitionUse, "fenced", "definition_fenced")
+	assertDefinitionText(t, daemon.sess, geometry, "missing", "definition_empty")
+	assertDefinitionText(t, daemon.sess, "relative.ts", "missing", "definition_invalid_file")
 	assertOutlineText(t, daemon.sess, mainTS, "outline_main")
 	assertOutlineText(t, daemon.sess, emptyTS, "outline_empty")
 	assertOutlineText(t, daemon.sess, "relative.ts", "outline_invalid_file")
@@ -177,6 +190,32 @@ func TestTierA(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := validateTelemetry(events, want.Telemetry); err != nil {
+		t.Fatal(err)
+	}
+	assertProtocolOnlyStdout(t, daemon.proc.StdoutBytes())
+}
+
+func TestTierADefinitionTruncation(t *testing.T) {
+	const cap = 1
+	dir := t.TempDir()
+	daemon := startDaemonWithConfig(t, testinfra.Config{
+		Binary:        daemonBin,
+		ProjectRoot:   testinfra.FixtureRoot(),
+		SessionID:     "tiera-definition-capped",
+		GraphMode:     "graph",
+		ControlSocket: filepath.Join(dir, "control.sock"),
+		MaxResults:    cap,
+	})
+	definitionUse := filepath.Join(fixtureRoot(t), "src", "definition_use.ts")
+	assertDefinitionText(t, daemon.sess, definitionUse, "overloaded", "definition_overloaded_capped")
+
+	stopDaemon(t, daemon)
+	wantEvent := expectedEvent{Tool: "find_definition", SessionID: "tiera-definition-capped", GraphMode: "graph", ResultSize: cap, Truncated: true}
+	events, err := testinfra.WaitForQuiescentJSONL(daemon.jsonl, 1, testinfra.ShortWait, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTelemetry(events, []expectedEvent{wantEvent}); err != nil {
 		t.Fatal(err)
 	}
 	assertProtocolOnlyStdout(t, daemon.proc.StdoutBytes())

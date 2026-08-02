@@ -48,6 +48,12 @@ func SymbolLine(symbol core.Symbol, depth int) string {
 	return indent + inlineText(declaration) + " [" + Range(symbol.Range) + "]"
 }
 
+// Inline escapes control characters so untrusted text cannot add response
+// lines or terminal control sequences.
+func Inline(text string) string {
+	return inlineText(text)
+}
+
 func inlineText(text string) string {
 	var rendered strings.Builder
 	for _, r := range text {

@@ -1,0 +1,9 @@
+definition for totalArea — src/geometry.ts [26:0-28:1]
+
+```
+export function totalArea(shapes: Shape[]): number {
+  return shapes.reduce((sum, s) => sum + s.area(), 0);
+}
+```
+
+1 definition; complete

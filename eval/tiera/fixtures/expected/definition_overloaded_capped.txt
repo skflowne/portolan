@@ -1,0 +1,7 @@
+definition for overloaded — src/definitions.ts [0:0-0:50]
+
+```
+export function overloaded(value: string): string;
+```
+
+1 definition; truncated: more definitions exist

@@ -77,7 +77,7 @@ func fileToolCases() []fileToolCase {
 			name: "find_definition",
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
+				return fileCallResult{out.Found, len(out.Definitions), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
 			},
 		},
 		{
@@ -400,8 +400,8 @@ func TestFindDefinition_ResolvesByNameAndPosition(t *testing.T) {
 	if !out.Found {
 		t.Fatalf("expected Found=true, got %+v", out)
 	}
-	if len(out.Locations) != 1 {
-		t.Fatalf("expected 1 location, got %d", len(out.Locations))
+	if len(out.Definitions) != 1 || out.Definitions[0].Target.File != file {
+		t.Fatalf("expected one typed definition, got %#v", out.Definitions)
 	}
 	if out.Truncated {
 		t.Fatalf("expected Truncated=false")
@@ -473,8 +473,8 @@ func TestFindDefinition_SymbolNotFound(t *testing.T) {
 	if out.Message == "" {
 		t.Fatalf("expected explanatory Message")
 	}
-	if out.Locations != nil {
-		t.Fatalf("expected nil Locations, got %+v", out.Locations)
+	if out.Definitions != nil {
+		t.Fatalf("expected nil Definitions, got %+v", out.Definitions)
 	}
 
 	ev, ok := logger.last()
@@ -820,6 +820,7 @@ func (p *telemetryProvider) Definition(_ context.Context, file string, _ core.Po
 }
 
 func (p *telemetryProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	p.enter()
 	definitions := make([]core.Definition, len(locations))
 	for i, location := range locations {
 		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
