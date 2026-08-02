@@ -15,7 +15,9 @@ type FindReferencesInput struct {
 	Line   *int   `json:"line,omitempty" jsonschema:"optional 0-based line number, used to disambiguate when the symbol name occurs more than once in the file"`
 }
 
-// FindReferencesOutput is the output schema for find_references.
+// FindReferencesOutput is the authoritative typed internal retrieval result,
+// not an advertised MCP output schema. RenderReferences owns its agent-facing
+// projection.
 type FindReferencesOutput struct {
 	// Found is true iff at least one reference location was returned. Both
 	// "symbol name did not resolve" and "resolved but has no references" are
