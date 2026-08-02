@@ -26,7 +26,7 @@ The boundary has one owner at each stage:
 | JSON-RPC transport | `internal/lsp.transport` | Owns Content-Length framing, request IDs, pending responses, writes, cancellation dispatch, server errors, and connection/process lifecycle. |
 | Language-operation orchestration | `internal/lsp.Provider` | Opens canonical files, builds method-specific parameters, calls the transport, and sends successful raw results to the matching decoder. Transport, open, and request errors return before decoding. |
 | Raw-result normalization | Concrete functions in `internal/lsp` | `isJSONNull`, `decodeDocumentSymbols`, `decodeLocations`, `rawLocation.toLocation`, position/range converters, `lspDocumentSymbol.toCoreSymbol`, `symbolKindName`, `decodeHoverSignature`, and `decodeHoverContents` validate and convert successful method-specific results. |
-| Tool behavior | `internal/tools` | Uses only `core.LanguageProvider`, resolves names, applies caps, stamps freshness, and turns provider failures into structured soft tool errors. |
+| Tool behavior | `internal/tools` | Uses only `core.LanguageProvider`, resolves names, applies caps, stamps freshness, preserves typed soft errors, and assembles compact text where required. |
 | Process composition | `cmd/portoland` | Constructs `lsp.Provider` and supplies it to the tools layer as a `core.LanguageProvider`. |
 
 Consequently, tools receive no `json.RawMessage`, JSON-RPC envelopes, LSP numeric enums, file URIs,
@@ -62,11 +62,11 @@ The complete production query call graph through `LanguageProvider` is:
 | `internal/tools/find_references.go` | `DocumentSymbols` for name-to-position resolution | `References` with `includeDeclaration=true` |
 | `internal/tools/get_outline.go` | `DocumentSymbols` for structure | `SymbolSignatures` for retained symbols |
 
-No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the typed tool methods.
-The MCP SDK derives schemas from the canonical input types of all three and from the output types of
-`find_definition` and `find_references`; `get_outline` registers an untyped output value, advertises no
-output schema, and answers with the compact text `internal/tools`'"'"'s renderer assembles from the same
-canonical result.
+No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the canonical input
+types for all three tools. The MCP SDK derives a structured output schema only for `find_definition`;
+`find_references` and `get_outline` register untyped output values, advertise no output schema, and
+each answer with one compact text item assembled by `internal/tools` from the same canonical typed
+result.
 
 Tests use the same seam through `core.StubProvider` and focused test providers in
 `internal/tools/tools_test.go` and `internal/tools/operation_budget_test.go`. Direct production
@@ -92,10 +92,11 @@ Pinned raw document-symbol fixtures additionally cover interface, class, constru
 method, function, anonymous-callback hierarchy, unknown kinds, and complete canonical ranges.
 `provider_test.go` exercises document symbols, definitions, references, honest-null definitions,
 canonical escaped paths, and concurrent queries against the real pinned language server.
-`internal/tools` tests cover name resolution, caps, retained-symbol enrichment, honest-empty
-results, soft errors, and the shared operation budget. `internal/mcp/server_test.go` checks typed MCP
-round trips, while `eval/tiera` checks the final real-daemon contract: the structured output of
-`find_definition` and `find_references`, and `get_outline`'"'"'s exact agent-facing text. Transport framing,
+`internal/tools` tests cover name resolution, caps, retained-symbol enrichment, ordered reference
+grouping, honest-empty results, soft errors, and the shared operation budget.
+`internal/mcp/server_test.go` checks the structured definition round trip and text-only reference and
+outline transports, while `eval/tiera` checks the final real-daemon contract: `find_definition`'s
+structured output and exact agent-facing text for `find_references` and `get_outline`. Transport framing,
 pending-response, cancellation, and shutdown behavior has separate owner-level tests under
 `internal/lsp`.
 
@@ -199,6 +200,10 @@ rejects a successful result whose length differs from the retained symbol count.
 This order prevents a large file from causing hover requests for symbols that the tool will discard.
 Definition and reference tools also use `DocumentSymbols` first, but only to resolve a requested
 name to the canonical selection-range position before making their second provider request.
+`find_references` then groups the complete normalized location result by first file appearance,
+retains the first `Config.Cap()` groups, and keeps every location in those files. Its typed result
+records the provider total so compact-text truncation can report the exact omitted-reference count;
+telemetry result size remains the retained reference count.
 
 ## Errors at the tool boundary
 

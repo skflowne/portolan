@@ -3,7 +3,8 @@
 // core.LanguageProvider seam.
 //
 // Every tool method in this package follows the same contract:
-//   - result lists are capped at cfg.Cap(), with Truncated set when capped
+//   - result lists are capped at cfg.Cap(), except references retain every
+//     location from the first cfg.Cap() file groups
 //   - every output carries a Freshness stamp taken from the GenerationCounter
 //     at the start of the call
 //   - exactly one core.Event is emitted per call, success or failure

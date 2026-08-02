@@ -122,7 +122,7 @@ func parseConfigWithOutput(args []string, output io.Writer) (core.Config, error)
 	graphMode := fs.String("graph-mode", envOr("PORTOLAN_GRAPH_MODE", core.DefaultGraphMode), `eval axis: "graph" or "no-graph"`)
 	controlSocket := fs.String("control-socket", "", "control-socket path (empty uses the project-keyed default)")
 	tsgoPath := fs.String("tsgo", "tsgo", "tsgo executable (resolved on PATH if not absolute)")
-	maxResults := fs.Int("max-results", 0, "cap applied to every list-returning tool result (0 = default)")
+	maxResults := fs.Int("max-results", 0, "maximum returned items; for find_references, maximum first-seen files (0 = default)")
 
 	if err := fs.Parse(args); err != nil {
 		return core.Config{}, err

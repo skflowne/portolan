@@ -30,7 +30,8 @@ type Config struct {
 	// project-keyed. Empty means derive from ProjectRoot.
 	ControlSocket string
 
-	// MaxResults caps every list-returning tool. 0 means DefaultMaxResults.
+	// MaxResults caps returned items, except find_references where it caps
+	// retained first-seen file groups. 0 means DefaultMaxResults.
 	MaxResults int
 }
 
@@ -42,8 +43,7 @@ const (
 	// DefaultGraphMode is used when no graph mode flag or environment value is supplied.
 	DefaultGraphMode = GraphModeGraph
 
-	// DefaultMaxResults is the cap applied when Config.MaxResults is 0. Every
-	// list-returning tool paginates/caps — never dump an unbounded result.
+	// DefaultMaxResults is the effective cap when Config.MaxResults is 0.
 	DefaultMaxResults = 100
 )
 
