@@ -7,38 +7,46 @@ import (
 	"github.com/skflowne/portolan/internal/core"
 )
 
-type locationGroup struct {
-	file   string
-	ranges []core.Range
+// LocationGroup is one first-seen file and its complete provider locations.
+type LocationGroup struct {
+	File      string
+	Locations []core.Location
 }
 
-// Locations groups locations by first file appearance while retaining provider
-// range order within each file.
-func Locations(locations []core.Location) string {
-	groups := make([]locationGroup, 0)
+// GroupLocations groups locations by first file appearance while retaining
+// complete locations and provider order within each file.
+func GroupLocations(locations []core.Location) []LocationGroup {
+	groups := make([]LocationGroup, 0)
 	groupIndexes := make(map[string]int)
 	for _, location := range locations {
 		index, exists := groupIndexes[location.File]
 		if !exists {
 			index = len(groups)
 			groupIndexes[location.File] = index
-			groups = append(groups, locationGroup{file: location.File})
+			groups = append(groups, LocationGroup{File: location.File})
 		}
-		groups[index].ranges = append(groups[index].ranges, location.Range)
+		groups[index].Locations = append(groups[index].Locations, location)
 	}
+	return groups
+}
+
+// Locations groups locations by first file appearance while retaining provider
+// range order within each file.
+func Locations(locations []core.Location) string {
+	groups := GroupLocations(locations)
 
 	var rendered strings.Builder
 	for groupIndex, group := range groups {
 		if groupIndex > 0 {
 			rendered.WriteByte('\n')
 		}
-		rendered.WriteString(inlineText(group.file))
+		rendered.WriteString(inlineText(group.File))
 		rendered.WriteString(" [")
-		for rangeIndex, range_ := range group.ranges {
+		for rangeIndex, location := range group.Locations {
 			if rangeIndex > 0 {
 				rendered.WriteString(", ")
 			}
-			rendered.WriteString(Range(range_))
+			rendered.WriteString(Range(location.Range))
 		}
 		rendered.WriteByte(']')
 	}

@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/skflowne/portolan/internal/core"
@@ -17,6 +18,14 @@ func TestLocationsPreservesFirstFileAppearanceAndProviderRangeOrder(t *testing.T
 	}
 	want := "/project/a.ts [7:13-7:19, 6:6-6:12, 9:2-10:4]\n" +
 		"/project/b.ts [3:9-3:15, 8:6-8:12]"
+	wantGroups := []render.LocationGroup{
+		{File: "/project/a.ts", Locations: []core.Location{locations[0], locations[2], locations[4]}},
+		{File: "/project/b.ts", Locations: []core.Location{locations[1], locations[3]}},
+	}
+
+	if got := render.GroupLocations(locations); !reflect.DeepEqual(got, wantGroups) {
+		t.Fatalf("GroupLocations() = %+v, want %+v", got, wantGroups)
+	}
 
 	if got := render.Locations(locations); got != want {
 		t.Fatalf("Locations() = %q, want %q", got, want)

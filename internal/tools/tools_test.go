@@ -81,10 +81,11 @@ func fileToolCases() []fileToolCase {
 			},
 		},
 		{
-			name: "find_references",
+			name:        "find_references",
+			reportsFile: true,
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, out.File, err}
 			},
 		},
 		{
@@ -508,19 +509,20 @@ func TestFindDefinition_ProviderErrorIsSoft(t *testing.T) {
 	}
 }
 
-func TestFindReferences_CapsAndTruncates(t *testing.T) {
+func TestFindReferences_FileCapRetainsEveryReferenceInSelectedGroups(t *testing.T) {
 	file := "/repo/main.go"
 	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
-	var refs []core.Location
-	for i := 0; i < 250; i++ {
-		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
+	refs := []core.Location{
+		{File: "/repo/a.go", Range: rng(1, 0, 1, 1)},
+		{File: "/repo/a.go", Range: rng(2, 0, 2, 1)},
+		{File: "/repo/a.go", Range: rng(3, 0, 3, 1)},
 	}
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.SymbolNode{file: symbols},
 		Refs:    map[string][]core.Location{file: refs},
 	}
 	logger := &capturingLogger{}
-	cfg := core.Config{MaxResults: 50}
+	cfg := core.Config{MaxResults: 1}
 	tl := newTestTools(provider, logger, cfg)
 
 	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: file, Symbol: "Used"})
@@ -530,42 +532,56 @@ func TestFindReferences_CapsAndTruncates(t *testing.T) {
 	if !out.Found {
 		t.Fatalf("expected Found=true")
 	}
-	if !out.Truncated {
-		t.Fatalf("expected Truncated=true")
+	if out.Truncated {
+		t.Fatal("one selected file group must be complete")
 	}
-	if len(out.Locations) != 50 {
-		t.Fatalf("expected 50 (capped) locations, got %d", len(out.Locations))
+	if !reflect.DeepEqual(out.Locations, refs) {
+		t.Fatalf("locations = %+v, want every reference %+v", out.Locations, refs)
+	}
+	if out.File != file || out.TotalReferences != len(refs) {
+		t.Fatalf("file/total = %q/%d, want %q/%d", out.File, out.TotalReferences, file, len(refs))
 	}
 
 	ev, _ := logger.last()
-	if !ev.Truncated || ev.ResultSize != 50 {
+	if ev.Truncated || ev.ResultSize != len(refs) {
 		t.Fatalf("unexpected event: %+v", ev)
 	}
 }
 
-func TestFindReferences_DefaultCap(t *testing.T) {
+func TestFindReferences_FileCapGroupsInterleavedReferencesInFirstSeenOrder(t *testing.T) {
 	file := "/repo/main.go"
 	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
-	var refs []core.Location
-	for i := 0; i < core.DefaultMaxResults+10; i++ {
-		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
+	refs := []core.Location{
+		{File: "/repo/a.go", Range: rng(1, 0, 1, 1)},
+		{File: "/repo/b.go", Range: rng(2, 0, 2, 1)},
+		{File: "/repo/a.go", Range: rng(3, 0, 3, 1)},
+		{File: "/repo/c.go", Range: rng(4, 0, 4, 1)},
+		{File: "/repo/b.go", Range: rng(5, 0, 5, 1)},
 	}
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.SymbolNode{file: symbols},
 		Refs:    map[string][]core.Location{file: refs},
 	}
 	logger := &capturingLogger{}
-	tl := newTestTools(provider, logger, core.Config{}) // MaxResults=0 -> DefaultMaxResults
+	tl := newTestTools(provider, logger, core.Config{MaxResults: 2})
 
 	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: file, Symbol: "Used"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !out.Truncated {
-		t.Fatalf("expected Truncated=true with default cap")
+		t.Fatal("omitted file group must set Truncated")
 	}
-	if len(out.Locations) != core.DefaultMaxResults {
-		t.Fatalf("expected %d locations, got %d", core.DefaultMaxResults, len(out.Locations))
+	want := []core.Location{refs[0], refs[2], refs[1], refs[4]}
+	if !reflect.DeepEqual(out.Locations, want) {
+		t.Fatalf("locations = %+v, want grouped first-seen order %+v", out.Locations, want)
+	}
+	if out.File != file || out.TotalReferences != len(refs) || out.TotalReferences-len(out.Locations) != 1 {
+		t.Fatalf("file/total/omitted = %q/%d/%d, want %q/%d/1", out.File, out.TotalReferences, out.TotalReferences-len(out.Locations), file, len(refs))
+	}
+	ev, _ := logger.last()
+	if !ev.Truncated || ev.ResultSize != len(want) {
+		t.Fatalf("unexpected event: %+v", ev)
 	}
 }
 
@@ -823,7 +839,7 @@ func (p *telemetryProvider) References(_ context.Context, file string, _ core.Po
 	if p.outcome == "empty" {
 		return nil, nil
 	}
-	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
+	return []core.Location{{File: file}, {File: file + ".second"}, {File: file + ".third"}}, nil
 }
 
 func (p *telemetryProvider) DocumentSymbols(_ context.Context, file string) ([]core.SymbolNode, error) {
