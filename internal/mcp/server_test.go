@@ -39,6 +39,12 @@ func testTools(t *testing.T) *tools.Tools {
 		Definitions: map[string][]core.Location{
 			file: {{File: file, Range: core.Range{Start: core.Position{Line: 0}, End: core.Position{Line: 0, Character: 3}}}},
 		},
+		Refs: map[string][]core.Location{
+			file: {
+				{File: file, Range: core.Range{Start: core.Position{Line: 1, Character: 5}, End: core.Position{Line: 1, Character: 12}}},
+				{File: "/repo/other.go", Range: core.Range{Start: core.Position{Line: 3}, End: core.Position{Line: 3, Character: 7}}},
+			},
+		},
 	}
 	return tools.New(provider, &core.GenerationCounter{}, core.NopLogger{}, core.Config{SessionID: "test", GraphMode: "graph"})
 }
@@ -92,6 +98,7 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 
 	names := map[string]bool{}
+	var references *sdk.Tool
 	var outline *sdk.Tool
 	for _, tool := range listServerTools(t, srv) {
 		names[tool.Name] = true
@@ -101,6 +108,9 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 		if tool.Name == "get_outline" {
 			outline = tool
 		}
+		if tool.Name == "find_references" {
+			references = tool
+		}
 	}
 	for _, want := range []string{"find_definition", "find_references", "get_outline"} {
 		if !names[want] {
@@ -109,6 +119,17 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 	if outline == nil {
 		t.Fatal("get_outline tool not found")
+	}
+	if references == nil {
+		t.Fatal("find_references tool not found")
+	}
+	for _, grammar := range []string{"references <symbol> — <canonical-source-path>[:line]", "ranges 0-based", "half-open", "first appearance", "truncated:", "empty:", "error:"} {
+		if !strings.Contains(references.Description, grammar) {
+			t.Errorf("find_references description does not explain %q: %q", grammar, references.Description)
+		}
+	}
+	if references.OutputSchema != nil {
+		t.Fatalf("find_references advertises an output schema for a text-only response: %+v", references.OutputSchema)
 	}
 	for _, grammar := range []string{"ranges 0-based", "two spaces per nesting level", "symbols; complete", "truncated: more symbols exist", "empty:", "error:"} {
 		if !strings.Contains(outline.Description, grammar) {
@@ -387,6 +408,52 @@ func TestNewServer_GetOutlineReturnsOnlyRenderedText(t *testing.T) {
 	}
 	if !strings.Contains(text.Text, "file /repo/main.go") || !strings.Contains(text.Text, "1 symbol; complete") {
 		t.Fatalf("get_outline text is not the compact outline: %q", text.Text)
+	}
+}
+
+func TestNewServer_FindReferencesReturnsOnlyRenderedText(t *testing.T) {
+	tl := testTools(t)
+	srv := NewServer(tl)
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		_, _ = srv.Connect(ctx, serverTransport, nil)
+	}()
+	client := sdk.NewClient(&sdk.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer cs.Close()
+
+	in := tools.FindReferencesInput{File: "/repo/main.go", Symbol: "DoThing"}
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{
+		Name:      "find_references",
+		Arguments: map[string]any{"file": in.File, "symbol": in.Symbol},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error result: %+v", res)
+	}
+	if res.StructuredContent != nil {
+		t.Fatalf("find_references duplicated its result as structured content: %+v", res.StructuredContent)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("find_references content = %+v, want exactly one item", res.Content)
+	}
+	text, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("find_references content item type = %T, want *sdk.TextContent", res.Content[0])
+	}
+	out, err := tl.FindReferences(ctx, in)
+	if err != nil {
+		t.Fatalf("FindReferences: %v", err)
+	}
+	if text.Text != tools.RenderReferences(out, in) {
+		t.Fatalf("transport text = %q, want tools projection %q", text.Text, tools.RenderReferences(out, in))
 	}
 }
 

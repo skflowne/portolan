@@ -17,13 +17,12 @@ import (
 	"github.com/skflowne/portolan/internal/tools"
 )
 
-// pinnedContract is the independently authored expectation for the tools that
-// still answer with structured JSON. get_outline answers with compact text and
-// is pinned by the files under fixtures/expected instead.
+// pinnedContract is the independently authored expectation for find_definition
+// structured output and the complete telemetry sequence. Text tools are pinned
+// by files under fixtures/expected instead.
 type pinnedContract struct {
 	DefinitionTotalArea tools.FindDefinitionOutput `json:"definition_total_area"`
 	DefinitionRadius    tools.FindDefinitionOutput `json:"definition_radius"`
-	ReferencesCircle    tools.FindReferencesOutput `json:"references_circle"`
 	Telemetry           []expectedEvent            `json:"telemetry"`
 	raw                 map[string]any
 }
@@ -104,7 +103,6 @@ func normalizeContractPaths(t *testing.T, contract *pinnedContract) {
 	}
 	normalizeLocations(contract.DefinitionTotalArea.Locations)
 	normalizeLocations(contract.DefinitionRadius.Locations)
-	normalizeLocations(contract.ReferencesCircle.Locations)
 }
 
 // fixtureRelativeText removes checkout-specific fixture roots from text snapshots.
@@ -120,6 +118,13 @@ func expectedText(t *testing.T, name string) string {
 		t.Fatalf("reading pinned text %q: %v", name, err)
 	}
 	return strings.TrimSuffix(string(data), "\n")
+}
+
+func expectedAbsoluteText(t *testing.T, name string) string {
+	t.Helper()
+	pinned := expectedText(t, name)
+	absoluteSourcePrefix := filepath.Join(fixtureRoot(t), "src") + string(filepath.Separator)
+	return strings.ReplaceAll(pinned, "src/", absoluteSourcePrefix)
 }
 
 func fixtureRelativePath(t *testing.T, path string) string {
@@ -139,7 +144,6 @@ func validatePinnedContract(got, want pinnedContract) error {
 	}{
 		{"definition_total_area", got.DefinitionTotalArea, want.DefinitionTotalArea},
 		{"definition_radius", got.DefinitionRadius, want.DefinitionRadius},
-		{"references_circle", got.ReferencesCircle, want.ReferencesCircle},
 	}
 	for _, check := range checks {
 		if err := contractMismatch(check.path, check.got, check.want); err != nil {
@@ -275,7 +279,7 @@ func compareJSON(path string, got, want any) error {
 // unexpected keys, which Go decoding alone would silently accept.
 func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 	contract := loadPinnedContract(t)
-	wantRaw := expectedStructuredOutput(t, contract, "references_circle")
+	wantRaw := expectedStructuredOutput(t, contract, "definition_total_area")
 	tests := []struct {
 		name   string
 		mutate func(map[string]any)
@@ -288,7 +292,7 @@ func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 			delete(output["freshness"].(map[string]any), "stale")
 		}},
 		{name: "missing nested list coordinate", mutate: func(output map[string]any) {
-			location := output["locations"].([]any)[1].(map[string]any)
+			location := output["locations"].([]any)[0].(map[string]any)
 			delete(location["range"].(map[string]any)["start"].(map[string]any), "line")
 		}},
 		{name: "unexpected top-level key", mutate: func(output map[string]any) { output["extra"] = true }},
@@ -300,8 +304,8 @@ func TestPinnedStructuredOutputRejectsRawMutations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := cloneJSONValue(t, wantRaw).(map[string]any)
 			tt.mutate(raw)
-			var got tools.FindReferencesOutput
-			if err := decodeStructuredOutput("references_circle", raw, wantRaw, &got); err == nil {
+			var got tools.FindDefinitionOutput
+			if err := decodeStructuredOutput("definition_total_area", raw, wantRaw, &got); err == nil {
 				t.Fatal("raw mutation passed the pinned contract")
 			}
 		})
@@ -353,16 +357,16 @@ func TestPinnedContractRejectsMutations(t *testing.T) {
 		{name: "wrong member definition location", mutate: func(c *pinnedContract, _ []map[string]any) {
 			c.DefinitionRadius.Locations[0].Range.Start.Character++
 		}},
-		{name: "swapped reference locations", mutate: func(c *pinnedContract, _ []map[string]any) {
-			c.ReferencesCircle.Locations[2], c.ReferencesCircle.Locations[3] = c.ReferencesCircle.Locations[3], c.ReferencesCircle.Locations[2]
-		}},
-		{name: "wrong freshness", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Freshness.Generation = 1 }},
-		{name: "wrong truncation", mutate: func(c *pinnedContract, _ []map[string]any) { c.ReferencesCircle.Truncated = true }},
+		{name: "wrong freshness", mutate: func(c *pinnedContract, _ []map[string]any) { c.DefinitionTotalArea.Freshness.Generation = 1 }},
+		{name: "wrong truncation", mutate: func(c *pinnedContract, _ []map[string]any) { c.DefinitionTotalArea.Truncated = true }},
 		{name: "duplicate replaces missing event", mutate: func(_ *pinnedContract, events []map[string]any) { events[2] = events[1] }},
 		{name: "swapped outline events", mutate: func(_ *pinnedContract, events []map[string]any) { events[0], events[3] = events[3], events[0] }},
 		{name: "wrong session tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["session_id"] = "other" }},
 		{name: "wrong graph tag", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["graph_mode"] = "no-graph" }},
 		{name: "wrong result size", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["result_size"] = json.Number("12") }},
+		{name: "wrong references result size", mutate: func(_ *pinnedContract, events []map[string]any) { events[1]["result_size"] = json.Number("3") }},
+		{name: "wrong references truncation", mutate: func(_ *pinnedContract, events []map[string]any) { events[1]["truncated"] = true }},
+		{name: "unexpected references error", mutate: func(_ *pinnedContract, events []map[string]any) { events[1]["err"] = "wrong call" }},
 		{name: "unexpected error", mutate: func(_ *pinnedContract, events []map[string]any) { events[0]["err"] = "wrong call" }},
 		{name: "missing expected error", mutate: func(_ *pinnedContract, events []map[string]any) { delete(events[6], "err") }},
 		{name: "misattributed error", mutate: func(_ *pinnedContract, events []map[string]any) { events[6]["err"] = "other failure" }},
