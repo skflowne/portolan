@@ -36,6 +36,9 @@ func TestLocationsPreservesFirstFileAppearanceAndProviderRangeOrder(t *testing.T
 	if got := render.Locations(locations); got != want {
 		t.Fatalf("Locations() = %q, want %q", got, want)
 	}
+	if got := render.LocationGroups(gotGroups); got != want {
+		t.Fatalf("LocationGroups() = %q, want %q", got, want)
+	}
 }
 
 func TestGroupLocationsReturnsNoPartialGroupsAfterCancellation(t *testing.T) {

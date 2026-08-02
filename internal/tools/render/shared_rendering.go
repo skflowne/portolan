@@ -38,13 +38,18 @@ func GroupLocations(ctx context.Context, locations []core.Location) ([]LocationG
 // range order within each file.
 func Locations(locations []core.Location) string {
 	groups, _ := GroupLocations(context.Background(), locations)
+	return LocationGroups(groups)
+}
 
+// LocationGroups renders locations that have already passed through the sole
+// ordered grouping projection.
+func LocationGroups(groups []LocationGroup) string {
 	var rendered strings.Builder
 	for groupIndex, group := range groups {
 		if groupIndex > 0 {
 			rendered.WriteByte('\n')
 		}
-		rendered.WriteString(inlineText(group.File))
+		rendered.WriteString(InlineText(group.File))
 		rendered.WriteString(" [")
 		for rangeIndex, location := range group.Locations {
 			if rangeIndex > 0 {
@@ -60,17 +65,17 @@ func Locations(locations []core.Location) string {
 // FileLine names the single file an assembled projection describes, so
 // per-symbol lines never repeat it.
 func FileLine(file string) string {
-	return "file " + inlineText(file)
+	return "file " + InlineText(file)
 }
 
 // Empty renders an honest-empty state marker.
 func Empty(message string) string {
-	return "empty: " + inlineText(message)
+	return "empty: " + InlineText(message)
 }
 
 // Error renders a soft-error state marker.
 func Error(message string) string {
-	return "error: " + inlineText(message)
+	return "error: " + InlineText(message)
 }
 
 // Count renders a count with its singular or plural noun.
@@ -79,7 +84,7 @@ func Count(count int, singular, plural string) string {
 	if count == 1 {
 		noun = singular
 	}
-	return strconv.Itoa(count) + " " + inlineText(noun)
+	return strconv.Itoa(count) + " " + InlineText(noun)
 }
 
 // Footer renders completion or semantic truncation without inventing an
@@ -87,7 +92,7 @@ func Count(count int, singular, plural string) string {
 func Footer(count int, singular, plural string, truncated bool) string {
 	footer := Count(count, singular, plural)
 	if truncated {
-		return footer + "; truncated: more " + inlineText(plural) + " exist"
+		return footer + "; truncated: more " + InlineText(plural) + " exist"
 	}
 	return footer + "; complete"
 }
