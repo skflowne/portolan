@@ -80,7 +80,12 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 		}
 
 		out.TotalReferences = len(locs)
-		groups := render.GroupLocations(locs)
+		groups, err := render.GroupLocations(ctx, locs)
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("operation canceled while grouping references to %q", in.Symbol)
+			return
+		}
 		if cap := t.Cfg.Cap(); len(groups) > cap {
 			groups = groups[:cap]
 			out.Truncated = true

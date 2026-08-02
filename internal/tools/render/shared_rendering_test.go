@@ -1,6 +1,8 @@
 package render_test
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -23,12 +25,28 @@ func TestLocationsPreservesFirstFileAppearanceAndProviderRangeOrder(t *testing.T
 		{File: "/project/b.ts", Locations: []core.Location{locations[1], locations[3]}},
 	}
 
-	if got := render.GroupLocations(locations); !reflect.DeepEqual(got, wantGroups) {
-		t.Fatalf("GroupLocations() = %+v, want %+v", got, wantGroups)
+	gotGroups, err := render.GroupLocations(context.Background(), locations)
+	if err != nil {
+		t.Fatalf("GroupLocations() error = %v", err)
+	}
+	if !reflect.DeepEqual(gotGroups, wantGroups) {
+		t.Fatalf("GroupLocations() = %+v, want %+v", gotGroups, wantGroups)
 	}
 
 	if got := render.Locations(locations); got != want {
 		t.Fatalf("Locations() = %q, want %q", got, want)
+	}
+}
+
+func TestGroupLocationsReturnsNoPartialGroupsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	groups, err := render.GroupLocations(ctx, []core.Location{{File: "/project/a.ts"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GroupLocations() error = %v, want %v", err, context.Canceled)
+	}
+	if groups != nil {
+		t.Fatalf("GroupLocations() groups = %+v, want nil", groups)
 	}
 }
 

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -15,10 +16,13 @@ type LocationGroup struct {
 
 // GroupLocations groups locations by first file appearance while retaining
 // complete locations and provider order within each file.
-func GroupLocations(locations []core.Location) []LocationGroup {
+func GroupLocations(ctx context.Context, locations []core.Location) ([]LocationGroup, error) {
 	groups := make([]LocationGroup, 0)
 	groupIndexes := make(map[string]int)
 	for _, location := range locations {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		index, exists := groupIndexes[location.File]
 		if !exists {
 			index = len(groups)
@@ -27,13 +31,13 @@ func GroupLocations(locations []core.Location) []LocationGroup {
 		}
 		groups[index].Locations = append(groups[index].Locations, location)
 	}
-	return groups
+	return groups, nil
 }
 
 // Locations groups locations by first file appearance while retaining provider
 // range order within each file.
 func Locations(locations []core.Location) string {
-	groups := GroupLocations(locations)
+	groups, _ := GroupLocations(context.Background(), locations)
 
 	var rendered strings.Builder
 	for groupIndex, group := range groups {
