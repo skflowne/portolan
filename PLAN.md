@@ -142,8 +142,9 @@ Never hang the model. Prototype on tsgo first (TS is target #1), other servers l
 - Go daemon: MCP (stdio) + control socket, project-keyed path.
 - **`tsgo --lsp` client** as the first `LanguageProvider` (out-of-process LSP).
 - Tools v0: `find_definition`, `find_references`, `get_outline` — LSP-backed retrieval
-  (capped compact semantic signatures when authoritative provider data is available, never bodies;
-  carry `generation` + `stale` even if trivially fresh).
+  (`get_outline` returns capped compact semantic signatures without bodies; `find_definition`
+  returns capped exact complete declaration source from provider-retained analyzed snapshots;
+  typed results carry `generation` + `stale` even when routine text omits them).
 - **Path normalizer (WSL ↔ Windows) from the start.**
 - **Telemetry spine (full stack):** bounded asynchronous JSONL event stream + explicit opt-in
   OTLP/HTTP exporter + session/`graph_mode` tagging. MCP stdout is protocol-only; telemetry

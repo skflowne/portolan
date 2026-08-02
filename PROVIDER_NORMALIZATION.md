@@ -13,6 +13,8 @@ canonical atoms:
 - `core.Position` is a zero-based UTF-16 code-unit position.
 - `core.Range` is a validated half-open range.
 - `core.Location` contains a canonical absolute host path and range.
+- `core.Definition` couples the original provider target location with the matching complete
+  declaration range and exact source from the provider-retained analyzed snapshot.
 - `core.Symbol` contains a name, normalized `core.SymbolKind`, canonical file and ranges, and
   independent optional `Signature` and `Detail` strings.
 - `core.SymbolNode` adds hierarchy without making hierarchy part of symbol identity.
@@ -21,12 +23,12 @@ The boundary has one owner at each stage:
 
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
-| Canonical atoms and normalized query interface | `internal/core` | Defines `LanguageProvider`, `Position`, `Range`, `Location`, `Symbol`, and `SymbolNode`. |
+| Canonical atoms and normalized query interface | `internal/core` | Defines `LanguageProvider`, `Position`, `Range`, `Location`, `Definition`, `Symbol`, and `SymbolNode`. |
 | Caller path normalization and file-URI identity | `internal/pathnorm` | Canonicalizes tool input paths and exclusively encodes/decodes strict file URIs. |
 | JSON-RPC transport | `internal/lsp.transport` | Owns Content-Length framing, request IDs, pending responses, writes, cancellation dispatch, server errors, and connection/process lifecycle. |
 | Language-operation orchestration | `internal/lsp.Provider` | Opens canonical files, builds method-specific parameters, calls the transport, and sends successful raw results to the matching decoder. Transport, open, and request errors return before decoding. |
 | Raw-result normalization | Concrete functions in `internal/lsp` | `isJSONNull`, `decodeDocumentSymbols`, `decodeLocations`, `rawLocation.toLocation`, position/range converters, `lspDocumentSymbol.toCoreSymbol`, `symbolKindName`, `decodeHoverSignature`, and `decodeHoverContents` validate and convert successful method-specific results. |
-| Tool behavior | `internal/tools` | Uses only `core.LanguageProvider`, resolves names, applies caps, stamps freshness, and turns provider failures into structured soft tool errors. |
+| Tool behavior | `internal/tools` | Uses only `core.LanguageProvider`, resolves names, applies caps before enrichment, stamps freshness, preserves typed soft errors, and assembles final text. |
 | Process composition | `cmd/portoland` | Constructs `lsp.Provider` and supplies it to the tools layer as a `core.LanguageProvider`. |
 
 Consequently, tools receive no `json.RawMessage`, JSON-RPC envelopes, LSP numeric enums, file URIs,
@@ -39,10 +41,13 @@ canonical paths, and hover presentation wrappers become compact plain strings be
 ### Implementations and wire shapes
 
 - `internal/core/types.go` owns `LanguageProvider` and the canonical atoms.
-- `internal/core/stubprovider.go` supplies map-backed definition, reference, and symbol results for
-  upper-layer tests. Its signature method returns the existing canonical signatures in input order.
+- `internal/core/stubprovider.go` supplies map-backed definition, enriched-definition, reference,
+  and symbol results for upper-layer tests. Its signature method returns existing canonical
+  signatures in input order.
 - `internal/lsp/provider.go` contains the production `Provider` implementation and the definition,
   references, and document-symbol request orchestration.
+- `internal/lsp/definition_sources.go` owns grouped exact location-to-declaration matching and
+  source extraction from the snapshot retained by the existing per-file `didOpen` transition.
 - `internal/lsp/signatures.go` implements signature planning and bounded hover requests;
   `internal/lsp/declaration_headers.go` owns retained-source class/interface header extraction, and
   `internal/lsp/hover_conversion.go` owns hover decoding and tsgo display normalization.
@@ -56,22 +61,22 @@ canonical paths, and hover presentation wrappers become compact plain strings be
 
 The complete production query call graph through `LanguageProvider` is:
 
-| Tool call site | First provider stage | Second provider stage |
-| --- | --- | --- |
-| `internal/tools/find_definition.go` | `DocumentSymbols` for name-to-position resolution | `Definition` |
-| `internal/tools/find_references.go` | `DocumentSymbols` for name-to-position resolution | `References` with `includeDeclaration=true` |
-| `internal/tools/get_outline.go` | `DocumentSymbols` for structure | `SymbolSignatures` for retained symbols |
+| Tool call site | First provider stage | Second provider stage | Bounded enrichment stage |
+| --- | --- | --- | --- |
+| `internal/tools/find_definition.go` | `DocumentSymbols` for name-to-position resolution | `Definition` | `DefinitionSources` for capped locations |
+| `internal/tools/find_references.go` | `DocumentSymbols` for name-to-position resolution | `References` with `includeDeclaration=true` | — |
+| `internal/tools/get_outline.go` | `DocumentSymbols` for structure | — | `SymbolSignatures` for capped symbols |
 
-No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the typed tool methods.
-The MCP SDK derives schemas from the canonical input types of all three and from the output types of
-`find_definition` and `find_references`; `get_outline` registers an untyped output value, advertises no
-output schema, and answers with the compact text `internal/tools`'"'"'s renderer assembles from the same
-canonical result.
+No MCP handler calls `internal/lsp.Provider` directly. `internal/mcp` registers the tool methods.
+The MCP SDK derives input schemas from the canonical input types of all three tools and an output
+schema only for `find_references`. `find_definition` and `get_outline` register untyped output
+values, advertise no output schema, and each answer with exactly one compact text item assembled by
+its sole renderer in `internal/tools`, without structured duplication.
 
 Tests use the same seam through `core.StubProvider` and focused test providers in
 `internal/tools/tools_test.go` and `internal/tools/operation_budget_test.go`. Direct production
 provider calls are confined to `internal/lsp` integration and concurrency tests: `provider_test.go`,
-`provider_concurrency_test.go`, and `signatures_test.go`.
+`provider_concurrency_test.go`, `definition_sources_test.go`, and `signatures_test.go`.
 
 ### Decoder and boundary coverage
 
@@ -87,15 +92,19 @@ Raw conversion is tested independently of the subprocess transport:
   bounded concurrency, cancellation, and first-error behavior.
 - `framing_conversion_test.go` covers cancellation precedence and the absence of partial converted
   output.
+- `definition_sources_test.go` covers exact selection/full-range matching, provider order, one load
+  per distinct target file, bounded different-file work, retained source after a disk change, and
+  atomic mapping, extraction, and cancellation failures.
 
 Pinned raw document-symbol fixtures additionally cover interface, class, constructor, property,
 method, function, anonymous-callback hierarchy, unknown kinds, and complete canonical ranges.
 `provider_test.go` exercises document symbols, definitions, references, honest-null definitions,
 canonical escaped paths, and concurrent queries against the real pinned language server.
-`internal/tools` tests cover name resolution, caps, retained-symbol enrichment, honest-empty
-results, soft errors, and the shared operation budget. `internal/mcp/server_test.go` checks typed MCP
-round trips, while `eval/tiera` checks the final real-daemon contract: the structured output of
-`find_definition` and `find_references`, and `get_outline`'"'"'s exact agent-facing text. Transport framing,
+`internal/tools` tests cover name resolution, cap-before-enrichment, typed definitions, exact text
+assembly, retained-symbol enrichment, honest-empty results, soft errors, telemetry, and the shared
+operation budget. `internal/mcp/server_test.go` checks structured references and the text-only
+definition/outline transport contracts, while `eval/tiera` checks the final real-daemon contract:
+structured `find_references` plus exact agent-facing definition and outline text. Transport framing,
 pending-response, cancellation, and shutdown behavior has separate owner-level tests under
 `internal/lsp`.
 
@@ -144,6 +153,22 @@ unrepresentable URI, or invalid range geometry returns an error and no partial l
 Cancellation before or during conversion also returns the context error and no partial list. A
 JSON-RPC provider error bypasses conversion and is returned as a method-qualified transport error
 from the provider stage.
+
+### Definition source enrichment
+
+`DefinitionSources` accepts only locations the tools layer already capped. It groups them by target
+file and loads each distinct file's canonical document-symbol tree once, with at most eight target
+files active concurrently under the caller's existing operation context. `DocumentSymbols` uses
+the provider's normal `prepareOpen` path; source is then taken from that same file's retained
+`didOpen` transition rather than reread from disk.
+
+Each target range must equal exactly one canonical symbol selection range, or exactly one full
+symbol range when the provider supplied the full declaration range. The matched symbol's full range
+becomes `DeclarationRange`, and the UTF-16-aware `textInRange` extracts `Source` without whitespace,
+Unicode, or line-ending normalization. Results are written by original input index, so provider
+order survives grouped concurrent work. Missing or ambiguous matches, unavailable retained source,
+invalid extraction ranges, provider failure, or cancellation return an error and no partial
+definition slice; there is no approximate-line or disk-read fallback.
 
 ### Hover and signature content
 
@@ -197,19 +222,25 @@ rejects a successful result whose length differs from the retained symbol count.
 4. Signatures are associated by input index, then the bounded flat `OutlineSymbol` list is returned.
 
 This order prevents a large file from causing hover requests for symbols that the tool will discard.
-Definition and reference tools also use `DocumentSymbols` first, but only to resolve a requested
-name to the canonical selection-range position before making their second provider request.
+Definition and reference tools also use `DocumentSymbols` first to resolve a requested name to the
+canonical selection-range position before making their navigation request. `find_definition` then
+applies `Config.Cap()` to provider-ordered locations before calling `DefinitionSources`; it verifies
+one enriched result per retained location and publishes typed definitions only after complete
+success. Target-file counts never replace definition counts.
 
 ## Errors at the tool boundary
 
 All provider stages share the tools-owned operation context. Transport errors, provider errors,
-decoder errors, signature-batch errors, and cancellation are returned through `LanguageProvider`.
+decoder errors, definition mapping/extraction errors, signature-batch errors, and cancellation are
+returned through `LanguageProvider`.
 The tools layer exposes them as a populated output `error` and explanatory `message`, emits its one
 telemetry event, and returns no Go error to the MCP handler. An honest null or empty required
 structure/location stage produces `found: false` with no output error. Null or empty hover content
 only omits that symbol's optional signature, so an outline that retained symbols remains
 `found: true`. A successful provider result that arrives after operation cancellation is rejected
-before the tool accepts it.
+before the tool accepts it. `find_definition` mapping or extraction failures are atomic soft errors:
+no definition or truncation state is published, while typed freshness and telemetry still identify
+the call and its error.
 
 ## Deferred concerns
 
