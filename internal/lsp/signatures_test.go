@@ -437,7 +437,7 @@ func TestRequestSignaturesMissingHoverStaysEmpty(t *testing.T) {
 }
 
 func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
-	plans := make([]signaturePlan, maxConcurrentSignatureRequests*3)
+	plans := make([]signaturePlan, maxConcurrentProviderRequests*3)
 	for i := range plans {
 		plans[i].position = core.Position{Line: i}
 	}
@@ -453,7 +453,7 @@ func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
 		if inFlight > maximum {
 			maximum = inFlight
 		}
-		if inFlight == maxConcurrentSignatureRequests {
+		if inFlight == maxConcurrentProviderRequests {
 			reachedOnce.Do(func() { close(reachedLimit) })
 		}
 		mu.Unlock()
@@ -484,8 +484,8 @@ func TestRequestSignaturesBoundsConcurrency(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if maximum != maxConcurrentSignatureRequests || calls != len(plans) {
-		t.Fatalf("maximum concurrency = %d, calls = %d; want %d and %d", maximum, calls, maxConcurrentSignatureRequests, len(plans))
+	if maximum != maxConcurrentProviderRequests || calls != len(plans) {
+		t.Fatalf("maximum concurrency = %d, calls = %d; want %d and %d", maximum, calls, maxConcurrentProviderRequests, len(plans))
 	}
 }
 
@@ -598,7 +598,7 @@ func TestRequestSignaturesHonorsCancellation(t *testing.T) {
 	})
 
 	t.Run("in flight", func(t *testing.T) {
-		plans := make([]signaturePlan, maxConcurrentSignatureRequests)
+		plans := make([]signaturePlan, maxConcurrentProviderRequests)
 		ctx, cancel := context.WithCancel(context.Background())
 		var mu sync.Mutex
 		active := 0

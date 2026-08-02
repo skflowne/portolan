@@ -742,6 +742,10 @@ func (p *erroringProvider) Definition(_ context.Context, _ string, _ core.Positi
 	return nil, p.err
 }
 
+func (p *erroringProvider) DefinitionSources(_ context.Context, _ []core.Location) ([]core.Definition, error) {
+	return nil, p.err
+}
+
 func (p *erroringProvider) References(_ context.Context, _ string, _ core.Position, _ bool) ([]core.Location, error) {
 	return nil, p.err
 }
@@ -815,6 +819,14 @@ func (p *telemetryProvider) Definition(_ context.Context, file string, _ core.Po
 	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
 }
 
+func (p *telemetryProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
+}
+
 func (p *telemetryProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
 	p.enter()
 	if p.outcome == "result_error" {
@@ -863,6 +875,14 @@ func (p *fileRecordingProvider) files() []string {
 func (p *fileRecordingProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
 	p.record(file)
 	return []core.Location{{File: file}}, nil
+}
+
+func (p *fileRecordingProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
 }
 
 func (p *fileRecordingProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {

@@ -12,8 +12,6 @@ import (
 	"github.com/skflowne/portolan/internal/core"
 )
 
-const maxConcurrentSignatureRequests = 8
-
 type signaturePlan struct {
 	position core.Position
 	direct   string
@@ -130,7 +128,7 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 	var wg sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
-	workerCount := min(len(indexes), maxConcurrentSignatureRequests)
+	workerCount := min(len(indexes), maxConcurrentProviderRequests)
 	for range workerCount {
 		wg.Add(1)
 		go func() {

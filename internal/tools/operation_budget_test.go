@@ -361,6 +361,15 @@ func (p *contextRecordingProvider) Definition(ctx context.Context, file string, 
 	return []core.Location{{File: file}}, nil
 }
 
+func (p *contextRecordingProvider) DefinitionSources(ctx context.Context, locations []core.Location) ([]core.Definition, error) {
+	p.record(ctx)
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
+}
+
 func (p *contextRecordingProvider) References(ctx context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
 	p.record(ctx)
 	return []core.Location{{File: file}}, nil
@@ -395,6 +404,14 @@ func (p *cancelingResultProvider) Definition(_ context.Context, file string, _ c
 		p.cancel()
 	}
 	return []core.Location{{File: file}}, nil
+}
+
+func (p *cancelingResultProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
 }
 
 func (p *cancelingResultProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
@@ -463,6 +480,17 @@ func (p *blockingProvider) Definition(ctx context.Context, file string, _ core.P
 		return nil, err
 	}
 	return []core.Location{{File: file}}, nil
+}
+
+func (p *blockingProvider) DefinitionSources(ctx context.Context, locations []core.Location) ([]core.Definition, error) {
+	if err := p.block(ctx, "definition_sources"); err != nil {
+		return nil, err
+	}
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
 }
 
 func (p *blockingProvider) References(ctx context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {

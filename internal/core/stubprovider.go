@@ -5,13 +5,25 @@ import "context"
 // StubProvider supplies canned LanguageProvider results for tests and wiring
 // checks.
 type StubProvider struct {
-	Definitions map[string][]Location // keyed by file
-	Refs        map[string][]Location
-	Symbols     map[string][]SymbolNode
+	Definitions             map[string][]Location // keyed by file
+	DefinitionSourcesResult []Definition
+	Refs                    map[string][]Location
+	Symbols                 map[string][]SymbolNode
 }
 
 func (s *StubProvider) Definition(_ context.Context, file string, _ Position) ([]Location, error) {
 	return s.Definitions[file], nil
+}
+
+func (s *StubProvider) DefinitionSources(_ context.Context, locations []Location) ([]Definition, error) {
+	if s.DefinitionSourcesResult != nil {
+		return append([]Definition(nil), s.DefinitionSourcesResult...), nil
+	}
+	definitions := make([]Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
 }
 
 func (s *StubProvider) References(_ context.Context, file string, _ Position, _ bool) ([]Location, error) {
