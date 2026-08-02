@@ -90,12 +90,32 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			groups = groups[:cap]
 			out.Truncated = true
 		}
-		for _, group := range groups {
-			out.Locations = append(out.Locations, group.Locations...)
+		out.Locations, err = flattenLocationGroups(ctx, groups)
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("operation canceled while grouping references to %q", in.Symbol)
+			out.Truncated = false
+			return
 		}
 		out.Found = true
 	})
 	return out, nil
+}
+
+func flattenLocationGroups(ctx context.Context, groups []render.LocationGroup) ([]core.Location, error) {
+	locations := make([]core.Location, 0)
+	for _, group := range groups {
+		for _, location := range group.Locations {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			locations = append(locations, location)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return locations, nil
 }
 
 func (o *FindReferencesOutput) setFreshness(fresh core.Freshness) {

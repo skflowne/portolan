@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/skflowne/portolan/internal/core"
+	"github.com/skflowne/portolan/internal/tools/render"
 )
 
 func pos(line, char int) core.Position { return core.Position{Line: line, Character: char} }
@@ -582,6 +584,21 @@ func TestFindReferences_FileCapGroupsInterleavedReferencesInFirstSeenOrder(t *te
 	ev, _ := logger.last()
 	if !ev.Truncated || ev.ResultSize != len(want) {
 		t.Fatalf("unexpected event: %+v", ev)
+	}
+}
+
+func TestFlattenLocationGroupsReturnsNoPartialLocationsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	locations, err := flattenLocationGroups(ctx, []render.LocationGroup{{
+		File:      "/repo/a.go",
+		Locations: []core.Location{{File: "/repo/a.go"}},
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("flattenLocationGroups() error = %v, want %v", err, context.Canceled)
+	}
+	if locations != nil {
+		t.Fatalf("flattenLocationGroups() locations = %+v, want nil", locations)
 	}
 }
 
