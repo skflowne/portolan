@@ -105,8 +105,7 @@ func TestRenderReferencesDistinguishesHonestEmptyAndSoftErrors(t *testing.T) {
 				Message: `provider error resolving references to "Missing"`,
 				Error:   "references: context deadline exceeded",
 			},
-			want: header + `error: provider error resolving references to "Missing": references: context deadline exceeded` +
-				"\n\n0 references across 0 files; complete",
+			want: header + `error: provider error resolving references to "Missing": references: context deadline exceeded`,
 		},
 		{
 			name: "invalid input has no fabricated path header",

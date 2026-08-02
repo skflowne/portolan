@@ -32,6 +32,7 @@ func RenderReferences(out FindReferencesOutput, in FindReferencesInput) string {
 	switch {
 	case out.Error != "":
 		rendered.WriteString(render.Error(out.Message + ": " + out.Error))
+		return rendered.String()
 	case !out.Found:
 		rendered.WriteString(render.Empty(out.Message))
 	default:
