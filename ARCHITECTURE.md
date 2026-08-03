@@ -130,9 +130,6 @@ sequenceDiagram
     alt invalid or unrepresentable file
         T->>L: admit exactly one failure Event
         T-->>S: FindDefinitionOutput{error, freshness}
-        S->>T: RenderDefinition(input, output)
-        T-->>S: error text
-        S-->>M: one TextContent
     else canonical file
         T->>P: DocumentSymbols(canonical file, operation context)
         opt first query for this file
@@ -144,39 +141,54 @@ sequenceDiagram
         R->>G: textDocument/documentSymbol
         G-->>R: symbol tree
         R-->>P: demultiplexed response
-        P-->>T: []Symbol
-        T->>T: resolve name → Position (SelRange.Start)
-        T->>P: Definition(canonical file, pos, same operation context)
-        P->>R: register + dispatch textDocument/definition
-        R->>G: textDocument/definition
-        G-->>R: Location[]
-        R-->>P: demultiplexed response
-        P-->>T: []core.Location
-        T->>T: cap at Cfg.Cap()
-        T->>P: DefinitionSources(capped locations, same operation context)
-        par each distinct target file, at most 8 active
-            P->>P: DocumentSymbols(target) via prepareOpen
-            P->>R: textDocument/documentSymbol
-            R->>G: textDocument/documentSymbol
-            G-->>R: canonical target symbol tree
-            R-->>P: demultiplexed response
-            P->>P: exact target range → Symbol.Range<br/>slice retained didOpen source
-        end
-        P-->>T: []core.Definition in provider order<br/>or one atomic error
-        alt mapping, extraction, provider, or cancellation failure
+        P-->>T: []Symbol or provider/cancellation error
+        alt symbol stage failure
             T->>L: admit exactly one failure Event
             T-->>S: FindDefinitionOutput{error, same freshness}
-            S->>T: RenderDefinition(input, output)
-            T-->>S: error text
-            S-->>M: one TextContent
-        else complete enrichment
-            T->>L: admit exactly one Event (call-start freshness, duration, size, …)
-            T-->>S: FindDefinitionOutput{found, definitions, same freshness}
-            S->>T: RenderDefinition(input, output)
-            T-->>S: deterministic definition text
-            S-->>M: one TextContent; no structured duplicate
+        else symbol stage succeeds
+            T->>T: resolve name → Position (SelRange.Start)
+            alt requested symbol is unresolved
+                T->>L: admit exactly one honest-empty Event
+                T-->>S: FindDefinitionOutput{empty, same freshness}
+            else requested symbol resolves
+                T->>P: Definition(canonical file, pos, same operation context)
+                P->>R: register + dispatch textDocument/definition
+                R->>G: textDocument/definition
+                G-->>R: Location[]
+                R-->>P: demultiplexed response
+                P-->>T: []core.Location or provider/cancellation error
+                alt definition stage failure
+                    T->>L: admit exactly one failure Event
+                    T-->>S: FindDefinitionOutput{error, same freshness}
+                else provider returns no definition
+                    T->>L: admit exactly one honest-empty Event
+                    T-->>S: FindDefinitionOutput{empty, same freshness}
+                else provider returns locations
+                    T->>T: cap at Cfg.Cap()
+                    T->>P: DefinitionSources(capped locations, same operation context)
+                    par each distinct target file, at most 8 active
+                        P->>P: DocumentSymbols(target) via prepareOpen
+                        P->>R: textDocument/documentSymbol
+                        R->>G: textDocument/documentSymbol
+                        G-->>R: canonical target symbol tree
+                        R-->>P: demultiplexed response
+                        P->>P: exact target range → Symbol.Range<br/>slice retained didOpen source
+                    end
+                    P-->>T: []core.Definition in provider order<br/>or one atomic error
+                    alt mapping, extraction, provider, or cancellation failure
+                        T->>L: admit exactly one failure Event
+                        T-->>S: FindDefinitionOutput{error, same freshness}
+                    else complete enrichment
+                        T->>L: admit exactly one success Event
+                        T-->>S: FindDefinitionOutput{found, definitions, same freshness}
+                    end
+                end
+            end
         end
     end
+    S->>T: RenderDefinition(input, output)
+    T-->>S: deterministic definition, empty, or error text
+    S-->>M: one TextContent; no structured duplicate
     L-->>L: bounded FIFO → JSONL writer<br/>+ independent OTLP batch mirror
 ```
 
