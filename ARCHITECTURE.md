@@ -146,8 +146,11 @@ sequenceDiagram
             T->>L: admit exactly one failure Event
             T-->>S: FindDefinitionOutput{error, same freshness}
         else symbol stage succeeds
-            T->>T: resolve name → Position (SelRange.Start)
-            alt requested symbol is unresolved
+            T->>T: resolve name → Position (SelRange.Start), unresolved, or cancellation
+            alt name-resolution cancellation
+                T->>L: admit exactly one failure Event
+                T-->>S: FindDefinitionOutput{error, same freshness}
+            else requested symbol is unresolved
                 T->>L: admit exactly one honest-empty Event
                 T-->>S: FindDefinitionOutput{empty, same freshness}
             else requested symbol resolves
