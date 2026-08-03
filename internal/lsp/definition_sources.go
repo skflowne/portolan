@@ -3,12 +3,9 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/skflowne/portolan/internal/core"
 )
-
-const maxConcurrentProviderRequests = 8
 
 type definitionSnapshot struct {
 	symbols []core.SymbolNode
@@ -57,56 +54,19 @@ func enrichDefinitionSources(ctx context.Context, locations []core.Location, loa
 	}
 
 	definitions := make([]core.Definition, len(locations))
-	workCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	jobs := make(chan int)
-	var workers sync.WaitGroup
-	var firstErr error
-	var errOnce sync.Once
-	recordError := func(err error) {
-		errOnce.Do(func() {
-			firstErr = err
-			cancel()
-		})
+	indexes := make([]int, len(groups))
+	for i := range indexes {
+		indexes[i] = i
 	}
-
-	workerCount := min(len(groups), maxConcurrentProviderRequests)
-	for range workerCount {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for groupIndex := range jobs {
-				group := groups[groupIndex]
-				snapshot, err := load(workCtx, group.file)
-				if err == nil {
-					err = workCtx.Err()
-				}
-				if err == nil {
-					err = enrichDefinitionGroup(workCtx, locations, group, snapshot, definitions)
-				}
-				if err != nil {
-					recordError(err)
-					return
-				}
-			}
-		}()
-	}
-	for i := range groups {
-		select {
-		case jobs <- i:
-		case <-workCtx.Done():
-			break
+	err := runProviderBatch(ctx, indexes, func(ctx context.Context, groupIndex int) error {
+		group := groups[groupIndex]
+		snapshot, err := load(ctx, group.file)
+		if err != nil {
+			return err
 		}
-		if workCtx.Err() != nil {
-			break
-		}
-	}
-	close(jobs)
-	workers.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	if err := ctx.Err(); err != nil {
+		return enrichDefinitionGroup(ctx, locations, group, snapshot, definitions)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return definitions, nil
