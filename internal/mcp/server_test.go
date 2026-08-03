@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -39,6 +38,13 @@ func testTools(t *testing.T) *tools.Tools {
 		Definitions: map[string][]core.Location{
 			file: {{File: file, Range: core.Range{Start: core.Position{Line: 0}, End: core.Position{Line: 0, Character: 3}}}},
 		},
+		DefinitionSourcesResult: []core.Definition{{
+			Target: core.Location{File: file, Range: core.Range{
+				Start: core.Position{Line: 0}, End: core.Position{Line: 0, Character: 3},
+			}},
+			DeclarationRange: core.Range{Start: core.Position{Line: 0}, End: core.Position{Line: 2, Character: 1}},
+			Source:           "func DoThing() {\n\treturn\n}",
+		}},
 	}
 	return tools.New(provider, &core.GenerationCounter{}, core.NopLogger{}, core.Config{SessionID: "test", GraphMode: "graph"})
 }
@@ -92,7 +98,7 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 
 	names := map[string]bool{}
-	var outline *sdk.Tool
+	var definition, outline *sdk.Tool
 	for _, tool := range listServerTools(t, srv) {
 		names[tool.Name] = true
 		if tool.Description == "" {
@@ -100,6 +106,9 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 		}
 		if tool.Name == "get_outline" {
 			outline = tool
+		}
+		if tool.Name == "find_definition" {
+			definition = tool
 		}
 	}
 	for _, want := range []string{"find_definition", "find_references", "get_outline"} {
@@ -109,6 +118,17 @@ func TestNewServer_ConstructsAndRegistersTools(t *testing.T) {
 	}
 	if outline == nil {
 		t.Fatal("get_outline tool not found")
+	}
+	if definition == nil {
+		t.Fatal("find_definition tool not found")
+	}
+	for _, grammar := range []string{"definition for <symbol>", "complete declaration", "Markdown-safe fenced block", "definitions; complete", "truncated: more definitions exist", "empty:", "error:"} {
+		if !strings.Contains(definition.Description, grammar) {
+			t.Errorf("find_definition description does not explain %q: %q", grammar, definition.Description)
+		}
+	}
+	if definition.OutputSchema != nil {
+		t.Fatalf("find_definition advertises an output schema for a text-only response: %+v", definition.OutputSchema)
 	}
 	for _, grammar := range []string{"ranges 0-based", "two spaces per nesting level", "symbols; complete", "truncated: more symbols exist", "empty:", "error:"} {
 		if !strings.Contains(outline.Description, grammar) {
@@ -294,11 +314,11 @@ func TestNewServer_GetOutlineDescriptionMatchesRenderedText(t *testing.T) {
 	}
 }
 
-// TestNewServer_FindDefinitionRoundTrip drives a full tools/call round trip
-// over the SDK's in-memory transport and asserts the structured output
-// matches what internal/tools.FindDefinition produces directly.
-func TestNewServer_FindDefinitionRoundTrip(t *testing.T) {
-	srv := NewServer(testTools(t))
+// TestNewServer_FindDefinitionReturnsOnlyRenderedText pins the MCP boundary:
+// the tools-owned rendering is carried once with no structured duplicate.
+func TestNewServer_FindDefinitionReturnsOnlyRenderedText(t *testing.T) {
+	tl := testTools(t)
+	srv := NewServer(tl)
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -326,19 +346,23 @@ func TestNewServer_FindDefinitionRoundTrip(t *testing.T) {
 		t.Fatalf("expected success, got error result: %+v", res)
 	}
 
-	raw, err := json.Marshal(res.StructuredContent)
+	if res.StructuredContent != nil {
+		t.Fatalf("find_definition duplicated its result as structured content: %+v", res.StructuredContent)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("find_definition content = %+v, want exactly one item", res.Content)
+	}
+	text, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("find_definition content item type = %T, want *sdk.TextContent", res.Content[0])
+	}
+	in := tools.FindDefinitionInput{File: "/repo/main.go", Symbol: "DoThing"}
+	out, err := tl.FindDefinition(ctx, in)
 	if err != nil {
-		t.Fatalf("marshal structured content: %v", err)
+		t.Fatalf("FindDefinition: %v", err)
 	}
-	var out tools.FindDefinitionOutput
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal structured content: %v (raw=%s)", err, raw)
-	}
-	if !out.Found {
-		t.Fatalf("expected Found=true, got %+v", out)
-	}
-	if len(out.Locations) != 1 || out.Locations[0].File != "/repo/main.go" {
-		t.Fatalf("unexpected locations: %+v", out.Locations)
+	if text.Text != tools.RenderDefinition(in, out) {
+		t.Fatalf("transport text = %q, want tools projection %q", text.Text, tools.RenderDefinition(in, out))
 	}
 }
 

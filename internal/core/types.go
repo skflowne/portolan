@@ -64,6 +64,16 @@ type Location struct {
 	Range Range  `json:"range"`
 }
 
+// Definition is an enriched definition site. Target is the provider-returned
+// navigation fact, DeclarationRange is the matching symbol's complete range,
+// and Source is the exact text inside that range from the provider's analyzed
+// snapshot.
+type Definition struct {
+	Target           Location `json:"target"`
+	DeclarationRange Range    `json:"declarationRange"`
+	Source           string   `json:"source"`
+}
+
 // SymbolKind is a provider-neutral, human-readable symbol classification.
 type SymbolKind string
 
@@ -141,6 +151,12 @@ type LanguageProvider interface {
 	// Definition returns the definition site(s) of the symbol at pos in file.
 	// A found-nothing result is (nil, nil) — an honest null, not an error.
 	Definition(ctx context.Context, file string, pos Position) ([]Location, error)
+
+	// DefinitionSources enriches definition locations with their complete
+	// declaration ranges and exact source from provider-retained analyzed
+	// snapshots. Results correspond one-for-one with locations in input order;
+	// any mapping or extraction failure returns no partial result.
+	DefinitionSources(ctx context.Context, locations []Location) ([]Definition, error)
 
 	// References returns references to the symbol at pos in file. When
 	// includeDeclaration is true the declaration itself is included.

@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/skflowne/portolan/internal/core"
 )
-
-const maxConcurrentSignatureRequests = 8
 
 type signaturePlan struct {
 	position core.Position
@@ -124,60 +121,24 @@ func requestSignatures(ctx context.Context, uri string, plans []signaturePlan, r
 		return signatures, nil
 	}
 
-	workCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	var firstErr error
-	var errOnce sync.Once
-	workerCount := min(len(indexes), maxConcurrentSignatureRequests)
-	for range workerCount {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for index := range jobs {
-				if workCtx.Err() != nil {
-					return
-				}
-				raw, err := request(workCtx, "textDocument/hover", textDocumentPositionParams{
-					TextDocument: textDocumentIdentifier{URI: uri},
-					Position:     positions[index],
-				})
-				if err == nil {
-					var signature string
-					signature, err = runFiniteWork(workCtx, nil, func() (string, error) {
-						return decode(raw, plans[index].symbol)
-					})
-					if err == nil {
-						signatures[index] = signature
-					}
-				}
-				if err != nil {
-					errOnce.Do(func() {
-						firstErr = err
-						cancel()
-					})
-					return
-				}
-			}
-		}()
-	}
-	for _, index := range indexes {
-		select {
-		case jobs <- index:
-		case <-workCtx.Done():
-			break
+	err := runProviderBatch(ctx, indexes, func(ctx context.Context, index int) error {
+		raw, err := request(ctx, "textDocument/hover", textDocumentPositionParams{
+			TextDocument: textDocumentIdentifier{URI: uri},
+			Position:     positions[index],
+		})
+		if err != nil {
+			return err
 		}
-		if workCtx.Err() != nil {
-			break
+		signature, err := runFiniteWork(ctx, nil, func() (string, error) {
+			return decode(raw, plans[index].symbol)
+		})
+		if err != nil {
+			return err
 		}
-	}
-	close(jobs)
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	if err := ctx.Err(); err != nil {
+		signatures[index] = signature
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return signatures, nil

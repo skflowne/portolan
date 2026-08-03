@@ -1,0 +1,9 @@
+definition for fenced — src/definitions.ts [6:0-8:1]
+
+````
+export function fenced(): string {
+  return "```";
+}
+````
+
+1 definition; complete

@@ -85,6 +85,11 @@ bound. The lock file remains in place so ownership release cannot race with path
 
 **Cross-cutting principles** (from `PLAN.md`): signatures-not-bodies · symbol-name-path addressing ·
 cap/paginate every tool · never deny grep · bounded waits everywhere · accept honest null results.
+`find_definition` is the deliberate source-bearing exception to the signatures-not-bodies default:
+after the tools layer caps provider locations, `internal/lsp` matches each retained target exactly to
+a canonical full symbol range and extracts that range from the same source snapshot retained by
+`didOpen`. Grouped target-file work is bounded, while typed definitions and final text preserve
+provider order and fail atomically rather than falling back to narrow locations or newer disk text.
 For `get_outline`, `Signature` is a compact provider-authoritative semantic summary and `Detail`
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
 provider performs a concurrency-limited hover batch. Named TypeScript classes and interfaces use
@@ -125,7 +130,6 @@ sequenceDiagram
     alt invalid or unrepresentable file
         T->>L: admit exactly one failure Event
         T-->>S: FindDefinitionOutput{error, freshness}
-        S-->>M: structured failure
     else canonical file
         T->>P: DocumentSymbols(canonical file, operation context)
         opt first query for this file
@@ -137,19 +141,57 @@ sequenceDiagram
         R->>G: textDocument/documentSymbol
         G-->>R: symbol tree
         R-->>P: demultiplexed response
-        P-->>T: []Symbol
-        T->>T: resolve name → Position (SelRange.Start)
-        T->>P: Definition(canonical file, pos, same operation context)
-        P->>R: register + dispatch textDocument/definition
-        R->>G: textDocument/definition
-        G-->>R: Location[]
-        R-->>P: demultiplexed response
-        P-->>T: []core.Location
-        T->>T: cap at Cfg.Cap()
-        T->>L: admit exactly one Event (call-start freshness, duration, size, …)
-        T-->>S: FindDefinitionOutput{found, locations, same freshness}
-        S-->>M: structured result
+        P-->>T: []Symbol or provider/cancellation error
+        alt symbol stage failure
+            T->>L: admit exactly one failure Event
+            T-->>S: FindDefinitionOutput{error, same freshness}
+        else symbol stage succeeds
+            T->>T: resolve name → Position (SelRange.Start), unresolved, or cancellation
+            alt name-resolution cancellation
+                T->>L: admit exactly one failure Event
+                T-->>S: FindDefinitionOutput{error, same freshness}
+            else requested symbol is unresolved
+                T->>L: admit exactly one honest-empty Event
+                T-->>S: FindDefinitionOutput{empty, same freshness}
+            else requested symbol resolves
+                T->>P: Definition(canonical file, pos, same operation context)
+                P->>R: register + dispatch textDocument/definition
+                R->>G: textDocument/definition
+                G-->>R: Location[]
+                R-->>P: demultiplexed response
+                P-->>T: []core.Location or provider/cancellation error
+                alt definition stage failure
+                    T->>L: admit exactly one failure Event
+                    T-->>S: FindDefinitionOutput{error, same freshness}
+                else provider returns no definition
+                    T->>L: admit exactly one honest-empty Event
+                    T-->>S: FindDefinitionOutput{empty, same freshness}
+                else provider returns locations
+                    T->>T: cap at Cfg.Cap()
+                    T->>P: DefinitionSources(capped locations, same operation context)
+                    par each distinct target file, at most 8 active
+                        P->>P: DocumentSymbols(target) via prepareOpen
+                        P->>R: textDocument/documentSymbol
+                        R->>G: textDocument/documentSymbol
+                        G-->>R: canonical target symbol tree
+                        R-->>P: demultiplexed response
+                        P->>P: exact target range → Symbol.Range<br/>slice retained didOpen source
+                    end
+                    P-->>T: []core.Definition in provider order<br/>or one atomic error
+                    alt mapping, extraction, provider, or cancellation failure
+                        T->>L: admit exactly one failure Event
+                        T-->>S: FindDefinitionOutput{error, same freshness}
+                    else complete enrichment
+                        T->>L: admit exactly one success Event
+                        T-->>S: FindDefinitionOutput{found, definitions, same freshness}
+                    end
+                end
+            end
+        end
     end
+    S->>T: RenderDefinition(input, output)
+    T-->>S: deterministic definition, empty, or error text
+    S-->>M: one TextContent; no structured duplicate
     L-->>L: bounded FIFO → JSONL writer<br/>+ independent OTLP batch mirror
 ```
 
@@ -162,12 +204,13 @@ into shutdown errors, and diagnosed on stderr; MCP stdout remains protocol-only.
 
 The **tools layer owns one fixed 5-second operation budget** for the complete invocation. The same
 context covers path preparation, first-open disk reads and `didOpen`, name resolution, provider
-requests, outline signature enrichment, serialization, pipe writes, and response waits; the provider
-does not reset the deadline between stages. One tools-owned provider-stage runner invokes every
+requests, capped definition-source enrichment, outline signature enrichment, serialization, pipe
+writes, and response waits; the provider does not reset the deadline between stages. One
+tools-owned provider-stage runner invokes every
 provider request and rejects an otherwise successful result if the operation context is canceled by
-its acceptance point. Outline signature enrichment runs only after the result cap is applied and
-admits at most eight concurrent hover requests. Provider initialization keeps its separate 20-second
-budget for project loading.
+its acceptance point. Definition-source and outline-signature enrichment run only after their result
+caps are applied and admit at most eight concurrent target-file or hover requests respectively.
+Provider initialization keeps its separate 20-second budget for project loading.
 
 The `lsp.Provider` is concurrency-safe and delegates JSON-RPC connection ownership to one
 `transport`. That owner arbitrates open, closing, closed, and aborted states; pending-request
@@ -238,12 +281,12 @@ owners; the daemon and eval packages wire the implementations together.
 
 ```mermaid
 flowchart LR
-    core["internal/core<br/>navigation atoms · LanguageProvider<br/>Event/Logger · Config · StubProvider"]
-    lsp["internal/lsp<br/>tsgo client"]
+    core["internal/core<br/>navigation + definition atoms · LanguageProvider<br/>Event/Logger · Config · StubProvider"]
+    lsp["internal/lsp<br/>tsgo client · retained-source enrichment"]
     path["internal/pathnorm<br/>canonical paths · file-URI codec<br/>(stdlib only)"]
     tel["internal/telemetry"]
-    tools["internal/tools"]
-    render["internal/tools/render<br/>typed compact-text primitives"]
+    tools["internal/tools<br/>call policy · text assemblers"]
+    render["internal/tools/render<br/>typed compact-text + fenced-source primitives"]
     mcp["internal/mcp"]
     cmd["cmd/portoland<br/>(daemon main)"]
     eval["eval/tiera<br/>(Tier A gate)"]
@@ -286,18 +329,21 @@ through real-daemon readiness, command handling, duplicate ownership, and shutdo
 The three current navigation tools depend only on `core.LanguageProvider` and its typed canonical
 atoms. `internal/lsp` keeps JSON-RPC transport, operation orchestration, and concrete raw-result
 conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI identity owner.
-`internal/tools/render` projects canonical positions, ranges, symbols, and locations into shared
-compact-text primitives without provider or MCP dependencies. `get_outline` is the first tool to
-assemble those primitives: `tools.RenderOutline` is the sole author of its agent-facing text, and
-`internal/mcp` carries that text verbatim as the single content item of an untyped tool result, so
-no formatter or escaping decision lives at the transport. `find_definition` and `find_references`
-still answer with SDK-derived structured JSON. `get_outline` caps the document-symbol
+`internal/tools/render` projects canonical positions, ranges, symbols, locations, and exact fenced
+source into shared compact-text primitives without provider or MCP dependencies.
+`tools.RenderOutline` and `tools.RenderDefinition` are the sole authors of their respective
+agent-facing text, and
+`internal/mcp` carries each text verbatim as the single content item of an untyped tool result, so no
+formatter or escaping decision lives at the transport. `find_references` remains SDK-derived
+structured JSON. `get_outline` caps the document-symbol
 structure before requesting input-ordered signatures for retained symbols. `internal/lsp` completes
 those canonical signatures: matched class/interface headers come from the retained `didOpen`
 snapshot, while malformed or unavailable headers and other semantic summaries use hover. Rendering
 consumes canonical results and never participates in normalization; selection ranges, provider
 `Detail`, and the freshness stamp stay in the typed result for behavior, provider navigation,
-telemetry, and tests rather than reaching routine agent-facing text. `Detail` consequently has no
+telemetry, and tests rather than reaching routine agent-facing text. Definition targets likewise
+remain typed navigation facts while only their canonical full ranges and exact sources reach
+definition text. `Detail` consequently has no
 current agent-facing consumer: it remains a normalized provider fact, not a second declaration
 string for a renderer to fall back to.
 

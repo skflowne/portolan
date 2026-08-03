@@ -29,18 +29,30 @@ func NewServer(t *tools.Tools) *sdk.Server {
 
 	sdk.AddTool(srv, &sdk.Tool{
 		Name: "find_definition",
-		Description: "Navigate the code graph (via the language server) to find where a " +
-			"symbol is defined. Given a file and a symbol name (function, method, type, " +
-			"variable, etc.), resolves the symbol's position by name in that file's outline " +
-			"and returns the location(s) of its definition, each with the file path and a " +
-			"precise range. Use `line` to disambiguate when the same name appears more than " +
-			"once in the file. Every result carries a freshness stamp (generation/stale) so " +
-			"the caller knows whether the graph was rebuilt since the file was last edited. " +
-			"An empty result (found:false) means the symbol name did not resolve or has no " +
-			"definition on record -- it is not an error.",
-	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.FindDefinitionInput) (*sdk.CallToolResult, tools.FindDefinitionOutput, error) {
+		Description: "Navigate the code graph (via the language server) to retrieve where a symbol " +
+			"is defined and the exact complete declaration source. Given an absolute file path and " +
+			"a symbol name (function, method, type, variable, etc.), resolves the symbol's position " +
+			"by name in that file's outline. Use `line` to disambiguate when the same name appears " +
+			"more than once in the file.\n\n" +
+			"The reply is compact text. Each provider-ordered definition starts " +
+			"`definition for <symbol> — <absolute-file> [startLine:startCharacter-endLine:endCharacter]`, " +
+			"where the range is zero-based, half-open, and covers the complete declaration. After " +
+			"a blank line, a Markdown-safe fenced block contains the exact declaration source, " +
+			"including its body. After all sections, the last line is `1 definition; complete` or " +
+			"`N definitions; complete`, or `1 definition; truncated: more definitions exist` or " +
+			"`N definitions; truncated: more definitions exist` when the result cap was reached.\n\n" +
+			"An unresolved symbol or one with no definition answers `empty: <reason>`, which is honest " +
+			"and not a failure. Invalid input, provider failure, or source retrieval failure answers " +
+			"`error: <what failed>: <cause>`. Freshness is tracked internally and in telemetry, not " +
+			"printed routinely.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.FindDefinitionInput) (*sdk.CallToolResult, any, error) {
 		out, err := t.FindDefinition(ctx, in)
-		return nil, out, err
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: tools.RenderDefinition(in, out)}},
+		}, nil, nil
 	})
 
 	sdk.AddTool(srv, &sdk.Tool{

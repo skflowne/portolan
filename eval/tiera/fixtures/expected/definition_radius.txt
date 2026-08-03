@@ -1,0 +1,7 @@
+definition for radius — src/geometry.ts [8:14-8:44]
+
+```
+public readonly radius: number
+```
+
+1 definition; complete

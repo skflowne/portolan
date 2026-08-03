@@ -77,7 +77,7 @@ func fileToolCases() []fileToolCase {
 			name: "find_definition",
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindDefinition(ctx, FindDefinitionInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
+				return fileCallResult{out.Found, len(out.Definitions), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
 			},
 		},
 		{
@@ -400,8 +400,8 @@ func TestFindDefinition_ResolvesByNameAndPosition(t *testing.T) {
 	if !out.Found {
 		t.Fatalf("expected Found=true, got %+v", out)
 	}
-	if len(out.Locations) != 1 {
-		t.Fatalf("expected 1 location, got %d", len(out.Locations))
+	if len(out.Definitions) != 1 || out.Definitions[0].Target.File != file {
+		t.Fatalf("expected one typed definition, got %#v", out.Definitions)
 	}
 	if out.Truncated {
 		t.Fatalf("expected Truncated=false")
@@ -473,8 +473,8 @@ func TestFindDefinition_SymbolNotFound(t *testing.T) {
 	if out.Message == "" {
 		t.Fatalf("expected explanatory Message")
 	}
-	if out.Locations != nil {
-		t.Fatalf("expected nil Locations, got %+v", out.Locations)
+	if out.Definitions != nil {
+		t.Fatalf("expected nil Definitions, got %+v", out.Definitions)
 	}
 
 	ev, ok := logger.last()
@@ -742,6 +742,10 @@ func (p *erroringProvider) Definition(_ context.Context, _ string, _ core.Positi
 	return nil, p.err
 }
 
+func (p *erroringProvider) DefinitionSources(_ context.Context, _ []core.Location) ([]core.Definition, error) {
+	return nil, p.err
+}
+
 func (p *erroringProvider) References(_ context.Context, _ string, _ core.Position, _ bool) ([]core.Location, error) {
 	return nil, p.err
 }
@@ -815,6 +819,15 @@ func (p *telemetryProvider) Definition(_ context.Context, file string, _ core.Po
 	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
 }
 
+func (p *telemetryProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	p.enter()
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
+}
+
 func (p *telemetryProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {
 	p.enter()
 	if p.outcome == "result_error" {
@@ -863,6 +876,14 @@ func (p *fileRecordingProvider) files() []string {
 func (p *fileRecordingProvider) Definition(_ context.Context, file string, _ core.Position) ([]core.Location, error) {
 	p.record(file)
 	return []core.Location{{File: file}}, nil
+}
+
+func (p *fileRecordingProvider) DefinitionSources(_ context.Context, locations []core.Location) ([]core.Definition, error) {
+	definitions := make([]core.Definition, len(locations))
+	for i, location := range locations {
+		definitions[i] = core.Definition{Target: location, DeclarationRange: location.Range}
+	}
+	return definitions, nil
 }
 
 func (p *fileRecordingProvider) References(_ context.Context, file string, _ core.Position, _ bool) ([]core.Location, error) {

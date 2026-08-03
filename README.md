@@ -17,9 +17,11 @@ LSP-backed tools (`find_definition` / `find_references` / `get_outline`) over a 
 provider, including bounded semantic-signature enrichment for outlines; `get_outline` answers with
 one compact range-preserving text response (`file` header, `ranges 0-based`, two-space nesting,
 `1 symbol; complete` / `N symbols; complete` or `1 symbol; truncated: more symbols exist` /
-`N symbols; truncated: more symbols exist`, plus `empty:`/`error:` markers) instead of structured JSON;
-deterministic
-daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
+`N symbols; truncated: more symbols exist`, plus `empty:`/`error:` markers), while
+`find_definition` returns each provider-ordered target's exact complete declaration range and
+byte-exact source from the provider-retained analyzed snapshot in one Markdown-safe compact text
+response; both tools return one text item instead of structured JSON. The daemon also provides
+deterministic daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
 with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
 that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed
 on stderr. The current control protocol's `sync <file>` command only bumps the shared generation;
