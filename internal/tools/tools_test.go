@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -582,6 +583,85 @@ func TestFindReferences_FileCapGroupsInterleavedReferencesInFirstSeenOrder(t *te
 	ev, _ := logger.last()
 	if !ev.Truncated || ev.ResultSize != len(want) {
 		t.Fatalf("unexpected event: %+v", ev)
+	}
+}
+
+func TestFindReferences_DefaultCap(t *testing.T) {
+	const sourceFile = "/repo/main.go"
+	resultFile := func(index int) string {
+		return fmt.Sprintf("/repo/reference-%03d.go", index)
+	}
+	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
+	refs := make([]core.Location, 0, core.DefaultMaxResults+5)
+	for index := 0; index < core.DefaultMaxResults+2; index++ {
+		refs = append(refs, core.Location{File: resultFile(index), Range: rng(index, 0, index, 1)})
+	}
+	refs = append(refs,
+		core.Location{File: resultFile(0), Range: rng(core.DefaultMaxResults+2, 0, core.DefaultMaxResults+2, 1)},
+		core.Location{File: resultFile(core.DefaultMaxResults - 1), Range: rng(core.DefaultMaxResults+3, 0, core.DefaultMaxResults+3, 1)},
+		core.Location{File: resultFile(core.DefaultMaxResults), Range: rng(core.DefaultMaxResults+4, 0, core.DefaultMaxResults+4, 1)},
+	)
+	want := make([]core.Location, 0, core.DefaultMaxResults+2)
+	for index := 0; index < core.DefaultMaxResults; index++ {
+		want = append(want, core.Location{File: resultFile(index), Range: rng(index, 0, index, 1)})
+		if index == 0 {
+			want = append(want, core.Location{File: resultFile(index), Range: rng(core.DefaultMaxResults+2, 0, core.DefaultMaxResults+2, 1)})
+		}
+		if index == core.DefaultMaxResults-1 {
+			want = append(want, core.Location{File: resultFile(index), Range: rng(core.DefaultMaxResults+3, 0, core.DefaultMaxResults+3, 1)})
+		}
+	}
+	provider := &core.StubProvider{
+		Symbols: map[string][]core.SymbolNode{sourceFile: symbols},
+		Refs:    map[string][]core.Location{sourceFile: refs},
+	}
+	logger := &capturingLogger{}
+	tl := newTestTools(provider, logger, core.Config{})
+
+	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: sourceFile, Symbol: "Used"})
+	if err != nil {
+		t.Fatalf("FindReferences() error = %v", err)
+	}
+	if !out.Found {
+		t.Fatal("Found = false, want true")
+	}
+	if out.File != sourceFile {
+		t.Fatalf("File = %q, want %q", out.File, sourceFile)
+	}
+	if !reflect.DeepEqual(out.Locations, want) {
+		t.Fatalf("Locations = %+v, want %+v", out.Locations, want)
+	}
+	rendered := RenderReferences(out, FindReferencesInput{Symbol: "Used"})
+	for index := 0; index < core.DefaultMaxResults; index++ {
+		if !strings.Contains(rendered, resultFile(index)+" [") {
+			t.Fatalf("rendered references omit retained file group %q", resultFile(index))
+		}
+	}
+	omittedFiles := []string{resultFile(core.DefaultMaxResults), resultFile(core.DefaultMaxResults + 1)}
+	for _, omittedFile := range omittedFiles {
+		for _, location := range out.Locations {
+			if location.File == omittedFile {
+				t.Fatalf("retained locations include omitted file %q", omittedFile)
+			}
+		}
+	}
+	if out.RetainedFiles != core.DefaultMaxResults || out.TotalReferences != len(refs) || out.TotalReferences-len(out.Locations) != 3 || !out.Truncated {
+		t.Fatalf("files/total/omitted/truncated = %d/%d/%d/%v, want %d/%d/3/true", out.RetainedFiles, out.TotalReferences, out.TotalReferences-len(out.Locations), out.Truncated, core.DefaultMaxResults, len(refs))
+	}
+	if logger.count() != 1 {
+		t.Fatalf("telemetry events = %d, want 1", logger.count())
+	}
+	event, _ := logger.last()
+	if event.ResultSize != len(want) || !event.Truncated || event.Err != "" {
+		t.Fatalf("telemetry event = %+v, want retained result size %d, truncated, no error", event, len(want))
+	}
+	if !strings.HasSuffix(rendered, "102 references across 100 files; truncated: 3 more references exist") {
+		t.Fatalf("RenderReferences() = %q, want exact default-cap footer", rendered)
+	}
+	for _, omittedFile := range omittedFiles {
+		if strings.Contains(rendered, omittedFile) {
+			t.Fatalf("rendered references include omitted file %q", omittedFile)
+		}
 	}
 }
 
