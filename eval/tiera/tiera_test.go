@@ -92,10 +92,9 @@ func callInto(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	}
 }
 
-// callText drives a tool that answers in compact text and returns the response
-// with fixture paths made checkout-independent. It also holds the transport
-// invariant: exactly one text content item and no structured duplicate.
-func callText(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
+// callTextRaw drives a compact-text tool and holds the transport invariant:
+// exactly one text content item and no structured duplicate.
+func callTextRaw(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -116,7 +115,13 @@ func callText(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	if !ok {
 		t.Fatalf("%s content item type = %T, want *mcp.TextContent", name, res.Content[0])
 	}
-	normalized := fixtureRelativeText(t, text.Text)
+	return text.Text
+}
+
+// callText makes an exact text response checkout-independent for pinned files.
+func callText(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
+	t.Helper()
+	normalized := fixtureRelativeText(t, callTextRaw(t, sess, name, args))
 	if strings.Contains(normalized, fixtureRoot(t)) {
 		t.Fatalf("%s response retains an absolute fixture path: %q", name, normalized)
 	}
@@ -158,7 +163,10 @@ func TestTierA(t *testing.T) {
 	})
 
 	assertOutlineText(t, daemon.sess, geometry, "outline_geometry")
-	callInto(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"}, expectedStructuredOutput(t, want, "references_circle"), &got.ReferencesCircle)
+	references := callTextRaw(t, daemon.sess, "find_references", map[string]any{"file": geometry, "symbol": "Circle"})
+	if wantReferences := expectedAbsoluteText(t, "references_circle"); references != wantReferences {
+		t.Fatalf("references_circle text =\n%s\n\nwant\n%s", references, wantReferences)
+	}
 	callInto(t, daemon.sess, "find_definition", map[string]any{"file": geometry, "symbol": "totalArea"}, expectedStructuredOutput(t, want, "definition_total_area"), &got.DefinitionTotalArea)
 	// A parameter property's selection range is a nested, non-top-level one:
 	// the position every member navigation is issued at.

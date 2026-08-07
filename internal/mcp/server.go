@@ -47,15 +47,27 @@ func NewServer(t *tools.Tools) *sdk.Server {
 		Name: "find_references",
 		Description: "Navigate the code graph (via the language server) to find every " +
 			"reference to a symbol, including its declaration. Given a file and a symbol " +
-			"name, resolves the symbol's position by name in that file's outline and returns " +
-			"every location where it is used across the project. Use `line` to disambiguate " +
-			"when the same name appears more than once in the file. Results are capped (see " +
-			"`truncated`) and every result carries a freshness stamp (generation/stale). An " +
-			"empty result (found:false) means the symbol name did not resolve or has no " +
-			"references on record -- it is not an error.",
-	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.FindReferencesInput) (*sdk.CallToolResult, tools.FindReferencesOutput, error) {
+			"name, resolves the symbol's position by name in that file's outline. Use `line` " +
+			"to disambiguate when the same name appears more than once in the file.\n\n" +
+			"The reply is compact text. Line 1 is `references <symbol> — <canonical-source-path>[:line]`; " +
+			"line 2 is `ranges 0-based`. Each range is zero-based and half-open in " +
+			"`startLine:startCharacter-endLine:endCharacter` form. After a blank line, each " +
+			"canonical absolute file path appears once with all of its ranges in provider order. " +
+			"File groups preserve first appearance. The configured result cap retains that many " +
+			"file groups and every reference in them. The footer counts retained references and " +
+			"files, ending in `complete` or `truncated: N more references exist`.\n\n" +
+			"An unresolved symbol or a resolved symbol with no references answers `empty: <reason>`. " +
+			"Invalid input or a provider failure answers `error: <what failed>: <cause>` without " +
+			"becoming an MCP protocol error. Result freshness is tracked internally and is not " +
+			"part of this text.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in tools.FindReferencesInput) (*sdk.CallToolResult, any, error) {
 		out, err := t.FindReferences(ctx, in)
-		return nil, out, err
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: tools.RenderReferences(out, in)}},
+		}, nil, nil
 	})
 
 	sdk.AddTool(srv, &sdk.Tool{

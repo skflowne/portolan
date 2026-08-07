@@ -15,17 +15,6 @@
     "truncated": false,
     "freshness": {"generation": 0, "stale": false}
   },
-  "references_circle": {
-    "found": true,
-    "locations": [
-      {"file": "src/geometry.ts", "range": {"start": {"line": 7, "character": 13}, "end": {"line": 7, "character": 19}}},
-      {"file": "src/main.ts", "range": {"start": {"line": 3, "character": 9}, "end": {"line": 3, "character": 15}}},
-      {"file": "src/main.ts", "range": {"start": {"line": 6, "character": 6}, "end": {"line": 6, "character": 12}}},
-      {"file": "src/main.ts", "range": {"start": {"line": 8, "character": 6}, "end": {"line": 8, "character": 12}}}
-    ],
-    "truncated": false,
-    "freshness": {"generation": 0, "stale": false}
-  },
   "telemetry": [
     {"tool": "get_outline", "session_id": "tiera", "graph_mode": "graph", "result_size": 13, "truncated": false, "generation": 0, "stale": false},
     {"tool": "find_references", "session_id": "tiera", "graph_mode": "graph", "result_size": 4, "truncated": false, "generation": 0, "stale": false},

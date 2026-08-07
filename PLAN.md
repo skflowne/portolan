@@ -79,8 +79,9 @@ shown above are Phase 1 target behavior and are not implemented yet. The materia
 `SessionStart` injection are Phase 2 targets.
 
 **Cross-cutting principles:** signatures-not-bodies default · symbol-name-path addressing
-(offsets shift under edits we didn't observe) · cap/paginate every tool · never deny grep ·
-bounded waits everywhere · accept honest null results.
+(offsets shift under edits we didn't observe) · ordinary list-returning tools cap returned items through
+`Cfg.Cap()`; `find_references` instead caps first-seen canonical files and retains every provider
+location from selected files · never deny grep · bounded waits everywhere · accept honest null results.
 
 ---
 

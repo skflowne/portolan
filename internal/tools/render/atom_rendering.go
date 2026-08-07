@@ -45,10 +45,11 @@ func SymbolLine(symbol core.Symbol, depth int) string {
 	if declaration == "" {
 		return indent + "[" + Range(symbol.Range) + "]"
 	}
-	return indent + inlineText(declaration) + " [" + Range(symbol.Range) + "]"
+	return indent + InlineText(declaration) + " [" + Range(symbol.Range) + "]"
 }
 
-func inlineText(text string) string {
+// InlineText escapes text that must not create lines or terminal controls.
+func InlineText(text string) string {
 	var rendered strings.Builder
 	for _, r := range text {
 		switch r {

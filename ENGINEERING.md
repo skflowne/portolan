@@ -63,7 +63,10 @@ Every tool call:
 6. surfaces provider failures as soft output errors rather than panics; and
 7. honors `ctx` and bounded per-request timeouts.
 
-List-returning tools also cap through `Cfg.Cap()` and derive `Truncated` from that decision. New tools satisfy these rules through shared mechanisms rather than by copying an existing method.
+Ordinary list-returning tools cap returned items through `Cfg.Cap()` and derive `Truncated` from that decision.
+`find_references` is the exception: it applies `Cfg.Cap()` to first-seen canonical files and retains every
+provider location from each selected file. New tools satisfy these rules through shared mechanisms
+rather than by copying an existing method.
 
 ## State and structural ratchets
 

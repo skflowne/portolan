@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -81,10 +82,11 @@ func fileToolCases() []fileToolCase {
 			},
 		},
 		{
-			name: "find_references",
+			name:        "find_references",
+			reportsFile: true,
 			call: func(ctx context.Context, tl *Tools, file string) fileCallResult {
 				out, err := tl.FindReferences(ctx, FindReferencesInput{File: file, Symbol: "Target"})
-				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, "", err}
+				return fileCallResult{out.Found, len(out.Locations), out.Truncated, out.Freshness, out.Message, out.Error, out.File, err}
 			},
 		},
 		{
@@ -508,19 +510,20 @@ func TestFindDefinition_ProviderErrorIsSoft(t *testing.T) {
 	}
 }
 
-func TestFindReferences_CapsAndTruncates(t *testing.T) {
+func TestFindReferences_FileCapRetainsEveryReferenceInSelectedGroups(t *testing.T) {
 	file := "/repo/main.go"
 	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
-	var refs []core.Location
-	for i := 0; i < 250; i++ {
-		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
+	refs := []core.Location{
+		{File: "/repo/a.go", Range: rng(1, 0, 1, 1)},
+		{File: "/repo/a.go", Range: rng(2, 0, 2, 1)},
+		{File: "/repo/a.go", Range: rng(3, 0, 3, 1)},
 	}
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.SymbolNode{file: symbols},
 		Refs:    map[string][]core.Location{file: refs},
 	}
 	logger := &capturingLogger{}
-	cfg := core.Config{MaxResults: 50}
+	cfg := core.Config{MaxResults: 1}
 	tl := newTestTools(provider, logger, cfg)
 
 	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: file, Symbol: "Used"})
@@ -530,42 +533,135 @@ func TestFindReferences_CapsAndTruncates(t *testing.T) {
 	if !out.Found {
 		t.Fatalf("expected Found=true")
 	}
-	if !out.Truncated {
-		t.Fatalf("expected Truncated=true")
+	if out.Truncated {
+		t.Fatal("one selected file group must be complete")
 	}
-	if len(out.Locations) != 50 {
-		t.Fatalf("expected 50 (capped) locations, got %d", len(out.Locations))
+	if !reflect.DeepEqual(out.Locations, refs) {
+		t.Fatalf("locations = %+v, want every reference %+v", out.Locations, refs)
+	}
+	if out.File != file || out.TotalReferences != len(refs) || out.RetainedFiles != 1 {
+		t.Fatalf("file/total/files = %q/%d/%d, want %q/%d/1", out.File, out.TotalReferences, out.RetainedFiles, file, len(refs))
 	}
 
 	ev, _ := logger.last()
-	if !ev.Truncated || ev.ResultSize != 50 {
+	if ev.Truncated || ev.ResultSize != len(refs) {
 		t.Fatalf("unexpected event: %+v", ev)
 	}
 }
 
-func TestFindReferences_DefaultCap(t *testing.T) {
+func TestFindReferences_FileCapGroupsInterleavedReferencesInFirstSeenOrder(t *testing.T) {
 	file := "/repo/main.go"
 	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
-	var refs []core.Location
-	for i := 0; i < core.DefaultMaxResults+10; i++ {
-		refs = append(refs, core.Location{File: file, Range: rng(i, 0, i, 1)})
+	refs := []core.Location{
+		{File: "/repo/a.go", Range: rng(1, 0, 1, 1)},
+		{File: "/repo/b.go", Range: rng(2, 0, 2, 1)},
+		{File: "/repo/a.go", Range: rng(3, 0, 3, 1)},
+		{File: "/repo/c.go", Range: rng(4, 0, 4, 1)},
+		{File: "/repo/b.go", Range: rng(5, 0, 5, 1)},
 	}
 	provider := &core.StubProvider{
 		Symbols: map[string][]core.SymbolNode{file: symbols},
 		Refs:    map[string][]core.Location{file: refs},
 	}
 	logger := &capturingLogger{}
-	tl := newTestTools(provider, logger, core.Config{}) // MaxResults=0 -> DefaultMaxResults
+	tl := newTestTools(provider, logger, core.Config{MaxResults: 2})
 
 	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: file, Symbol: "Used"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !out.Truncated {
-		t.Fatalf("expected Truncated=true with default cap")
+		t.Fatal("omitted file group must set Truncated")
 	}
-	if len(out.Locations) != core.DefaultMaxResults {
-		t.Fatalf("expected %d locations, got %d", core.DefaultMaxResults, len(out.Locations))
+	want := []core.Location{refs[0], refs[2], refs[1], refs[4]}
+	if !reflect.DeepEqual(out.Locations, want) {
+		t.Fatalf("locations = %+v, want grouped first-seen order %+v", out.Locations, want)
+	}
+	if out.File != file || out.TotalReferences != len(refs) || out.RetainedFiles != 2 || out.TotalReferences-len(out.Locations) != 1 {
+		t.Fatalf("file/total/files/omitted = %q/%d/%d/%d, want %q/%d/2/1", out.File, out.TotalReferences, out.RetainedFiles, out.TotalReferences-len(out.Locations), file, len(refs))
+	}
+	ev, _ := logger.last()
+	if !ev.Truncated || ev.ResultSize != len(want) {
+		t.Fatalf("unexpected event: %+v", ev)
+	}
+}
+
+func TestFindReferences_DefaultCap(t *testing.T) {
+	const sourceFile = "/repo/main.go"
+	resultFile := func(index int) string {
+		return fmt.Sprintf("/repo/reference-%03d.go", index)
+	}
+	symbols := []core.SymbolNode{symbolNode(core.Symbol{Name: "Used", SelRange: rng(0, 0, 0, 4)})}
+	refs := make([]core.Location, 0, core.DefaultMaxResults+5)
+	for index := 0; index < core.DefaultMaxResults+2; index++ {
+		refs = append(refs, core.Location{File: resultFile(index), Range: rng(index, 0, index, 1)})
+	}
+	refs = append(refs,
+		core.Location{File: resultFile(0), Range: rng(core.DefaultMaxResults+2, 0, core.DefaultMaxResults+2, 1)},
+		core.Location{File: resultFile(core.DefaultMaxResults - 1), Range: rng(core.DefaultMaxResults+3, 0, core.DefaultMaxResults+3, 1)},
+		core.Location{File: resultFile(core.DefaultMaxResults), Range: rng(core.DefaultMaxResults+4, 0, core.DefaultMaxResults+4, 1)},
+	)
+	want := make([]core.Location, 0, core.DefaultMaxResults+2)
+	for index := 0; index < core.DefaultMaxResults; index++ {
+		want = append(want, core.Location{File: resultFile(index), Range: rng(index, 0, index, 1)})
+		if index == 0 {
+			want = append(want, core.Location{File: resultFile(index), Range: rng(core.DefaultMaxResults+2, 0, core.DefaultMaxResults+2, 1)})
+		}
+		if index == core.DefaultMaxResults-1 {
+			want = append(want, core.Location{File: resultFile(index), Range: rng(core.DefaultMaxResults+3, 0, core.DefaultMaxResults+3, 1)})
+		}
+	}
+	provider := &core.StubProvider{
+		Symbols: map[string][]core.SymbolNode{sourceFile: symbols},
+		Refs:    map[string][]core.Location{sourceFile: refs},
+	}
+	logger := &capturingLogger{}
+	tl := newTestTools(provider, logger, core.Config{})
+
+	out, err := tl.FindReferences(context.Background(), FindReferencesInput{File: sourceFile, Symbol: "Used"})
+	if err != nil {
+		t.Fatalf("FindReferences() error = %v", err)
+	}
+	if !out.Found {
+		t.Fatal("Found = false, want true")
+	}
+	if out.File != sourceFile {
+		t.Fatalf("File = %q, want %q", out.File, sourceFile)
+	}
+	if !reflect.DeepEqual(out.Locations, want) {
+		t.Fatalf("Locations = %+v, want %+v", out.Locations, want)
+	}
+	rendered := RenderReferences(out, FindReferencesInput{Symbol: "Used"})
+	for index := 0; index < core.DefaultMaxResults; index++ {
+		if !strings.Contains(rendered, resultFile(index)+" [") {
+			t.Fatalf("rendered references omit retained file group %q", resultFile(index))
+		}
+	}
+	omittedFiles := []string{resultFile(core.DefaultMaxResults), resultFile(core.DefaultMaxResults + 1)}
+	for _, omittedFile := range omittedFiles {
+		for _, location := range out.Locations {
+			if location.File == omittedFile {
+				t.Fatalf("retained locations include omitted file %q", omittedFile)
+			}
+		}
+	}
+	if out.RetainedFiles != core.DefaultMaxResults || out.TotalReferences != len(refs) || out.TotalReferences-len(out.Locations) != 3 || !out.Truncated {
+		t.Fatalf("files/total/omitted/truncated = %d/%d/%d/%v, want %d/%d/3/true", out.RetainedFiles, out.TotalReferences, out.TotalReferences-len(out.Locations), out.Truncated, core.DefaultMaxResults, len(refs))
+	}
+	if logger.count() != 1 {
+		t.Fatalf("telemetry events = %d, want 1", logger.count())
+	}
+	event, _ := logger.last()
+	if event.ResultSize != len(want) || !event.Truncated || event.Err != "" {
+		t.Fatalf("telemetry event = %+v, want retained result size %d, truncated, no error", event, len(want))
+	}
+	if !strings.HasSuffix(rendered, "102 references across 100 files; truncated: 3 more references exist") {
+		t.Fatalf("RenderReferences() = %q, want exact default-cap footer", rendered)
+	}
+	for _, omittedFile := range omittedFiles {
+		if strings.Contains(rendered, omittedFile) {
+			t.Fatalf("rendered references include omitted file %q", omittedFile)
+		}
 	}
 }
 
@@ -823,7 +919,7 @@ func (p *telemetryProvider) References(_ context.Context, file string, _ core.Po
 	if p.outcome == "empty" {
 		return nil, nil
 	}
-	return []core.Location{{File: file}, {File: file}, {File: file}}, nil
+	return []core.Location{{File: file}, {File: file + ".second"}, {File: file + ".third"}}, nil
 }
 
 func (p *telemetryProvider) DocumentSymbols(_ context.Context, file string) ([]core.SymbolNode, error) {

@@ -14,11 +14,13 @@ of how places reach each other, rather than a picture of the terrain.)
 
 **Phase 0 complete** — walking skeleton: a Go daemon (`portoland`) with an MCP stdio server, three
 LSP-backed tools (`find_definition` / `find_references` / `get_outline`) over a `tsgo --lsp`
-provider, including bounded semantic-signature enrichment for outlines; `get_outline` answers with
-one compact range-preserving text response (`file` header, `ranges 0-based`, two-space nesting,
+provider, including bounded semantic-signature enrichment for outlines; `find_references` answers
+with one compact text response that groups exact ranges under first-seen canonical file paths and
+caps retained file groups, while `get_outline` answers with one compact range-preserving text
+response (`file` header, `ranges 0-based`, two-space nesting,
 `1 symbol; complete` / `N symbols; complete` or `1 symbol; truncated: more symbols exist` /
-`N symbols; truncated: more symbols exist`, plus `empty:`/`error:` markers) instead of structured JSON;
-deterministic
+`N symbols; truncated: more symbols exist`, plus `empty:`/`error:` markers). Neither text tool
+duplicates its response as structured JSON; deterministic
 daemon/control-socket/LSP cancellation lifecycle, bounded JSONL telemetry
 with an opt-in OTLP/HTTP mirror, WSL↔Windows path handling, and a Tier A retrieval-correctness gate
 that drives the real daemon over MCP. MCP stdout is protocol-only; telemetry failures are diagnosed

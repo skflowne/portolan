@@ -84,7 +84,9 @@ listener first, marks shutdown under the connection mutex, closes every accepted
 bound. The lock file remains in place so ownership release cannot race with path cleanup.
 
 **Cross-cutting principles** (from `PLAN.md`): signatures-not-bodies · symbol-name-path addressing ·
-cap/paginate every tool · never deny grep · bounded waits everywhere · accept honest null results.
+ordinary list-returning tools cap returned items through `Cfg.Cap()`; `find_references` instead caps
+first-seen canonical files and retains every provider location from selected files · never deny grep ·
+bounded waits everywhere · accept honest null results.
 For `get_outline`, `Signature` is a compact provider-authoritative semantic summary and `Detail`
 preserves independent `DocumentSymbol.detail`. The tools layer caps the flattened outline before the
 provider performs a concurrency-limited hover batch. Named TypeScript classes and interfaces use
@@ -242,9 +244,9 @@ flowchart LR
     lsp["internal/lsp<br/>tsgo client"]
     path["internal/pathnorm<br/>canonical paths · file-URI codec<br/>(stdlib only)"]
     tel["internal/telemetry"]
-    tools["internal/tools"]
-    render["internal/tools/render<br/>typed compact-text primitives"]
-    mcp["internal/mcp"]
+    tools["internal/tools<br/>typed retrieval · reference grouping/selection/cap<br/>flattening · totals/truncation · compact assemblers"]
+    render["internal/tools/render<br/>typed ranges · display-only compact projection"]
+    mcp["internal/mcp<br/>structured definition<br/>text references · outline"]
     cmd["cmd/portoland<br/>(daemon main)"]
     eval["eval/tiera<br/>(Tier A gate)"]
     lifecycle["eval/lifecycle<br/>(daemon lifecycle gate)"]
@@ -286,13 +288,16 @@ through real-daemon readiness, command handling, duplicate ownership, and shutdo
 The three current navigation tools depend only on `core.LanguageProvider` and its typed canonical
 atoms. `internal/lsp` keeps JSON-RPC transport, operation orchestration, and concrete raw-result
 conversion behind that seam; `internal/pathnorm` remains the sole path/file-URI identity owner.
-`internal/tools/render` projects canonical positions, ranges, symbols, and locations into shared
-compact-text primitives without provider or MCP dependencies. `get_outline` is the first tool to
-assemble those primitives: `tools.RenderOutline` is the sole author of its agent-facing text, and
-`internal/mcp` carries that text verbatim as the single content item of an untyped tool result, so
-no formatter or escaping decision lives at the transport. `find_definition` and `find_references`
-still answer with SDK-derived structured JSON. `get_outline` caps the document-symbol
-structure before requesting input-ordered signatures for retained symbols. `internal/lsp` completes
+`internal/tools` owns reference grouping, selection, capping, flattening, totals, and truncation:
+`find_references` applies `Cfg.Cap()` to first-seen canonical files and retains every provider location
+from selected files. Its typed output and telemetry count retained references. `internal/tools/render`
+projects the already-selected canonical positions, ranges, symbols, and locations into display-only
+compact text; it cannot influence retained files. `tools.RenderReferences` and `tools.RenderOutline`
+are the sole authors of agent-facing text; `internal/mcp` carries each verbatim as one content item of
+an untyped tool result, so no formatter or escaping decision lives at the transport.
+`find_definition` alone still answers with SDK-derived structured JSON. `get_outline` caps the
+document-symbol structure before requesting input-ordered signatures for retained symbols.
+`internal/lsp` completes
 those canonical signatures: matched class/interface headers come from the retained `didOpen`
 snapshot, while malformed or unavailable headers and other semantic summaries use hover. Rendering
 consumes canonical results and never participates in normalization; selection ranges, provider

@@ -14,16 +14,22 @@ type FindReferencesInput struct {
 	Line   *int   `json:"line,omitempty" jsonschema:"optional 0-based line number, used to disambiguate when the symbol name occurs more than once in the file"`
 }
 
-// FindReferencesOutput is the output schema for find_references.
+// FindReferencesOutput is the authoritative typed internal retrieval result,
+// not an advertised MCP output schema. RenderReferences owns its agent-facing
+// projection.
 type FindReferencesOutput struct {
 	// Found is true iff at least one reference location was returned. Both
 	// "symbol name did not resolve" and "resolved but has no references" are
 	// honest, non-error results: Found is false and Message explains why.
-	Found     bool            `json:"found"`
-	Locations []core.Location `json:"locations"`
-	Truncated bool            `json:"truncated"`
-	Freshness core.Freshness  `json:"freshness"`
-	Message   string          `json:"message,omitempty"`
+	Found bool `json:"found"`
+	// File is the canonical source file containing the requested symbol.
+	File            string          `json:"file,omitempty"`
+	Locations       []core.Location `json:"locations"`
+	TotalReferences int             `json:"total_references"`
+	RetainedFiles   int             `json:"retained_files"`
+	Truncated       bool            `json:"truncated"`
+	Freshness       core.Freshness  `json:"freshness"`
+	Message         string          `json:"message,omitempty"`
 	// Error is set for input-validation or provider failures. Both are soft:
 	// the call never panics or returns a Go error for them.
 	Error string `json:"error,omitempty"`
@@ -41,6 +47,7 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			out.Message = failure.message
 			return
 		}
+		out.File = file
 		symbols, err := runProviderStage(ctx, func(ctx context.Context) ([]core.SymbolNode, error) {
 			return t.Provider.DocumentSymbols(ctx, file)
 		})
@@ -74,12 +81,17 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			return
 		}
 
-		if cap := t.Cfg.Cap(); len(locs) > cap {
-			locs = locs[:cap]
-			out.Truncated = true
+		selection, err := selectReferenceLocations(ctx, locs, t.Cfg.Cap())
+		if err != nil {
+			out.Error = err.Error()
+			out.Message = fmt.Sprintf("operation canceled while selecting references to %q", in.Symbol)
+			return
 		}
+		out.Locations = selection.Locations
+		out.TotalReferences = selection.TotalReferences
+		out.RetainedFiles = selection.RetainedFiles
+		out.Truncated = selection.Truncated
 		out.Found = true
-		out.Locations = locs
 	})
 	return out, nil
 }
