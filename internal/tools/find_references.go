@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/skflowne/portolan/internal/core"
-	"github.com/skflowne/portolan/internal/tools/render"
 )
 
 // FindReferencesInput is the input schema for find_references.
@@ -27,6 +26,7 @@ type FindReferencesOutput struct {
 	File            string          `json:"file,omitempty"`
 	Locations       []core.Location `json:"locations"`
 	TotalReferences int             `json:"total_references"`
+	RetainedFiles   int             `json:"retained_files"`
 	Truncated       bool            `json:"truncated"`
 	Freshness       core.Freshness  `json:"freshness"`
 	Message         string          `json:"message,omitempty"`
@@ -81,43 +81,19 @@ func (t *Tools) FindReferences(ctx context.Context, in FindReferencesInput) (Fin
 			return
 		}
 
-		out.TotalReferences = len(locs)
-		groups, err := render.GroupLocations(ctx, locs)
+		selection, err := selectReferenceLocations(ctx, locs, t.Cfg.Cap())
 		if err != nil {
 			out.Error = err.Error()
-			out.Message = fmt.Sprintf("operation canceled while grouping references to %q", in.Symbol)
+			out.Message = fmt.Sprintf("operation canceled while selecting references to %q", in.Symbol)
 			return
 		}
-		if cap := t.Cfg.Cap(); len(groups) > cap {
-			groups = groups[:cap]
-			out.Truncated = true
-		}
-		out.Locations, err = flattenLocationGroups(ctx, groups)
-		if err != nil {
-			out.Error = err.Error()
-			out.Message = fmt.Sprintf("operation canceled while grouping references to %q", in.Symbol)
-			out.Truncated = false
-			return
-		}
+		out.Locations = selection.Locations
+		out.TotalReferences = selection.TotalReferences
+		out.RetainedFiles = selection.RetainedFiles
+		out.Truncated = selection.Truncated
 		out.Found = true
 	})
 	return out, nil
-}
-
-func flattenLocationGroups(ctx context.Context, groups []render.LocationGroup) ([]core.Location, error) {
-	locations := make([]core.Location, 0)
-	for _, group := range groups {
-		for _, location := range group.Locations {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			locations = append(locations, location)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return locations, nil
 }
 
 func (o *FindReferencesOutput) setFreshness(fresh core.Freshness) {

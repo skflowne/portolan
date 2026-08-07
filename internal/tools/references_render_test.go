@@ -13,6 +13,7 @@ func TestRenderReferencesComposesGroupedRangesAndOptionalLine(t *testing.T) {
 		Found:           true,
 		File:            "/project/src/geometry.ts",
 		TotalReferences: 4,
+		RetainedFiles:   2,
 		Locations: []core.Location{
 			{File: "/project/src/geometry.ts", Range: rng(7, 13, 7, 19)},
 			{File: "/project/src/main.ts", Range: rng(3, 9, 3, 15)},
@@ -46,6 +47,7 @@ func TestRenderReferencesReportsExactOmittedReferenceCount(t *testing.T) {
 		Found:           true,
 		File:            "/project/src/geometry.ts",
 		TotalReferences: 17,
+		RetainedFiles:   2,
 		Truncated:       true,
 		Locations: []core.Location{
 			{File: "/project/src/a.ts", Range: rng(1, 0, 1, 1)},
@@ -68,6 +70,7 @@ func TestRenderReferencesReportsExactOmittedReferenceCount(t *testing.T) {
 		Found:           true,
 		File:            "/project/src/geometry.ts",
 		TotalReferences: 2,
+		RetainedFiles:   1,
 		Truncated:       true,
 		Locations: []core.Location{
 			{File: "/project/src/a.ts", Range: rng(1, 0, 1, 1)},
@@ -128,6 +131,7 @@ func TestRenderReferencesUsesSingularReferenceAndFile(t *testing.T) {
 		Found:           true,
 		File:            "/project/src/one.ts",
 		TotalReferences: 1,
+		RetainedFiles:   1,
 		Locations: []core.Location{
 			{File: "/project/src/one.ts", Range: rng(0, 0, 0, 1)},
 		},
@@ -143,6 +147,7 @@ func TestRenderReferencesEscapesHeaderText(t *testing.T) {
 		Found:           true,
 		File:            "/project/src/a\nranges 0-based\n\x1b[31mfake.ts",
 		TotalReferences: 1,
+		RetainedFiles:   1,
 		Locations: []core.Location{
 			{File: "/project/src/result.ts", Range: rng(0, 0, 0, 1)},
 		},

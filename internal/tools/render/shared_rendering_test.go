@@ -1,9 +1,6 @@
 package render_test
 
 import (
-	"context"
-	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/skflowne/portolan/internal/core"
@@ -20,36 +17,9 @@ func TestLocationsPreservesFirstFileAppearanceAndProviderRangeOrder(t *testing.T
 	}
 	want := "/project/a.ts [7:13-7:19, 6:6-6:12, 9:2-10:4]\n" +
 		"/project/b.ts [3:9-3:15, 8:6-8:12]"
-	wantGroups := []render.LocationGroup{
-		{File: "/project/a.ts", Locations: []core.Location{locations[0], locations[2], locations[4]}},
-		{File: "/project/b.ts", Locations: []core.Location{locations[1], locations[3]}},
-	}
-
-	gotGroups, err := render.GroupLocations(context.Background(), locations)
-	if err != nil {
-		t.Fatalf("GroupLocations() error = %v", err)
-	}
-	if !reflect.DeepEqual(gotGroups, wantGroups) {
-		t.Fatalf("GroupLocations() = %+v, want %+v", gotGroups, wantGroups)
-	}
 
 	if got := render.Locations(locations); got != want {
 		t.Fatalf("Locations() = %q, want %q", got, want)
-	}
-	if got := render.LocationGroups(gotGroups); got != want {
-		t.Fatalf("LocationGroups() = %q, want %q", got, want)
-	}
-}
-
-func TestGroupLocationsReturnsNoPartialGroupsAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	groups, err := render.GroupLocations(ctx, []core.Location{{File: "/project/a.ts"}})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("GroupLocations() error = %v, want %v", err, context.Canceled)
-	}
-	if groups != nil {
-		t.Fatalf("GroupLocations() groups = %+v, want nil", groups)
 	}
 }
 

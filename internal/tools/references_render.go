@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -15,7 +14,6 @@ func RenderReferences(out FindReferencesOutput, in FindReferencesInput) string {
 		return render.Error(out.Message + ": " + out.Error)
 	}
 
-	groups, _ := render.GroupLocations(context.Background(), out.Locations)
 	var rendered strings.Builder
 	rendered.WriteString("references ")
 	rendered.WriteString(render.InlineText(in.Symbol))
@@ -36,10 +34,10 @@ func RenderReferences(out FindReferencesOutput, in FindReferencesInput) string {
 	case !out.Found:
 		rendered.WriteString(render.Empty(out.Message))
 	default:
-		rendered.WriteString(render.LocationGroups(groups))
+		rendered.WriteString(render.Locations(out.Locations))
 	}
 	rendered.WriteString("\n\n")
-	rendered.WriteString(referencesFooter(len(out.Locations), len(groups), out.TotalReferences, out.Truncated))
+	rendered.WriteString(referencesFooter(len(out.Locations), out.RetainedFiles, out.TotalReferences, out.Truncated))
 	return rendered.String()
 }
 

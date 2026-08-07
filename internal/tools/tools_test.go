@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/skflowne/portolan/internal/core"
-	"github.com/skflowne/portolan/internal/tools/render"
 )
 
 func pos(line, char int) core.Position { return core.Position{Line: line, Character: char} }
@@ -540,8 +538,8 @@ func TestFindReferences_FileCapRetainsEveryReferenceInSelectedGroups(t *testing.
 	if !reflect.DeepEqual(out.Locations, refs) {
 		t.Fatalf("locations = %+v, want every reference %+v", out.Locations, refs)
 	}
-	if out.File != file || out.TotalReferences != len(refs) {
-		t.Fatalf("file/total = %q/%d, want %q/%d", out.File, out.TotalReferences, file, len(refs))
+	if out.File != file || out.TotalReferences != len(refs) || out.RetainedFiles != 1 {
+		t.Fatalf("file/total/files = %q/%d/%d, want %q/%d/1", out.File, out.TotalReferences, out.RetainedFiles, file, len(refs))
 	}
 
 	ev, _ := logger.last()
@@ -578,27 +576,12 @@ func TestFindReferences_FileCapGroupsInterleavedReferencesInFirstSeenOrder(t *te
 	if !reflect.DeepEqual(out.Locations, want) {
 		t.Fatalf("locations = %+v, want grouped first-seen order %+v", out.Locations, want)
 	}
-	if out.File != file || out.TotalReferences != len(refs) || out.TotalReferences-len(out.Locations) != 1 {
-		t.Fatalf("file/total/omitted = %q/%d/%d, want %q/%d/1", out.File, out.TotalReferences, out.TotalReferences-len(out.Locations), file, len(refs))
+	if out.File != file || out.TotalReferences != len(refs) || out.RetainedFiles != 2 || out.TotalReferences-len(out.Locations) != 1 {
+		t.Fatalf("file/total/files/omitted = %q/%d/%d/%d, want %q/%d/2/1", out.File, out.TotalReferences, out.RetainedFiles, out.TotalReferences-len(out.Locations), file, len(refs))
 	}
 	ev, _ := logger.last()
 	if !ev.Truncated || ev.ResultSize != len(want) {
 		t.Fatalf("unexpected event: %+v", ev)
-	}
-}
-
-func TestFlattenLocationGroupsReturnsNoPartialLocationsAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	locations, err := flattenLocationGroups(ctx, []render.LocationGroup{{
-		File:      "/repo/a.go",
-		Locations: []core.Location{{File: "/repo/a.go"}},
-	}})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("flattenLocationGroups() error = %v, want %v", err, context.Canceled)
-	}
-	if locations != nil {
-		t.Fatalf("flattenLocationGroups() locations = %+v, want nil", locations)
 	}
 }
 

@@ -1,57 +1,36 @@
 package render
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
 	"github.com/skflowne/portolan/internal/core"
 )
 
-// LocationGroup is one first-seen file and its complete provider locations.
-type LocationGroup struct {
-	File      string
-	Locations []core.Location
-}
-
-// GroupLocations groups locations by first file appearance while retaining
-// complete locations and provider order within each file.
-func GroupLocations(ctx context.Context, locations []core.Location) ([]LocationGroup, error) {
-	groups := make([]LocationGroup, 0)
+// Locations projects locations into first-seen file lines while retaining
+// provider range order within each file. It does not select or cap locations.
+func Locations(locations []core.Location) string {
+	var rendered strings.Builder
 	groupIndexes := make(map[string]int)
+	groups := make([][]core.Location, 0)
+	files := make([]string, 0)
 	for _, location := range locations {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		index, exists := groupIndexes[location.File]
 		if !exists {
-			index = len(groups)
+			index = len(files)
 			groupIndexes[location.File] = index
-			groups = append(groups, LocationGroup{File: location.File})
+			files = append(files, location.File)
+			groups = append(groups, nil)
 		}
-		groups[index].Locations = append(groups[index].Locations, location)
+		groups[index] = append(groups[index], location)
 	}
-	return groups, nil
-}
-
-// Locations groups locations by first file appearance while retaining provider
-// range order within each file.
-func Locations(locations []core.Location) string {
-	groups, _ := GroupLocations(context.Background(), locations)
-	return LocationGroups(groups)
-}
-
-// LocationGroups renders locations that have already passed through the sole
-// ordered grouping projection.
-func LocationGroups(groups []LocationGroup) string {
-	var rendered strings.Builder
 	for groupIndex, group := range groups {
 		if groupIndex > 0 {
 			rendered.WriteByte('\n')
 		}
-		rendered.WriteString(InlineText(group.File))
+		rendered.WriteString(InlineText(files[groupIndex]))
 		rendered.WriteString(" [")
-		for rangeIndex, location := range group.Locations {
+		for rangeIndex, location := range group {
 			if rangeIndex > 0 {
 				rendered.WriteString(", ")
 			}
