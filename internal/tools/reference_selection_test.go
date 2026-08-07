@@ -45,10 +45,53 @@ func TestSelectReferenceLocationsReturnsNoPartialSelectionAfterCancellation(t *t
 	cancel()
 
 	selection, err := selectReferenceLocations(ctx, []core.Location{{File: "/repo/a.go"}}, 1)
+	assertCanceledSelection(t, selection, err)
+}
+
+func TestSelectReferenceLocationsReturnsNoPartialSelectionAfterFlattenCancellation(t *testing.T) {
+	locations := []core.Location{
+		{File: "/repo/a.go"},
+		{File: "/repo/b.go"},
+		{File: "/repo/a.go"},
+	}
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &cancelAfterChecksContext{
+		Context:    base,
+		cancel:     cancel,
+		checkLimit: len(locations),
+	}
+
+	selection, err := selectReferenceLocations(ctx, locations, 2)
+	if ctx.checks != len(locations) {
+		t.Fatalf("grouping checks = %d, want %d before flatten cancellation", ctx.checks, len(locations))
+	}
+	assertCanceledSelection(t, selection, err)
+}
+
+func assertCanceledSelection(t *testing.T, selection referenceSelection, err error) {
+	t.Helper()
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("selectReferenceLocations() error = %v, want %v", err, context.Canceled)
 	}
 	if selection.Locations != nil || selection.TotalReferences != 0 || selection.RetainedFiles != 0 || selection.Truncated {
 		t.Fatalf("selectReferenceLocations() selection = %+v, want zero selection", selection)
 	}
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	cancel     context.CancelFunc
+	checkLimit int
+	checks     int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	if err := c.Context.Err(); err != nil {
+		return err
+	}
+	c.checks++
+	if c.checks == c.checkLimit {
+		c.cancel()
+	}
+	return nil
 }
